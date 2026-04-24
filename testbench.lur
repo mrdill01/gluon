@@ -1,0 +1,764 @@
+assert: __VERSION__ = "lur 1.0"
+
+let names() = do
+	let value = "whatever"
+	
+	let name = value
+	let Name = value
+	let NAME = value
+	let name_123 = value
+	let Name_123 = value
+	let NAME_123 = value
+end
+
+let null_literal() = do
+	assert: null = null
+end
+
+let bool_literal() = do
+	assert: true = true
+	assert: false = false
+end
+
+let number_literal() = do
+	let whole = 314
+	let decimal = 3.14
+	
+	let hexadecimal = 0xff
+	assert: hexadecimal = 255
+	
+	let binary = 0b0101
+	assert: binary = 5
+end
+
+let text_literal() = do
+	let empty = ""
+	
+	assert: "plain" = "plain"
+	assert: "\\" = "\x5c"
+	assert: "\"" = "\x22"
+	assert: "\t" = "\x09"
+	assert: "\n" = "\x0a"
+	assert: "\r" = "\x0d"
+	assert: "\0" = "\x00"
+	assert: "A" = "\x41"
+end
+
+let list_literal() = do
+	let empty = []
+	let numbers = [1, 4, 7]
+	let trailing_comma = [
+		1, 2, 3,
+	]
+end
+
+let map_literal() = do
+	let empty = {}
+	let config = {
+		"video" =>  {
+			"resx" => 1920,
+			"resy" => 1080,
+			"fullscreen" => 1,
+			"vsync" => false,
+			"preset" => "ultra",
+			"materials" => 4,
+			"shaders" => 4,
+			"lights" => 4,
+			"lod" => 4,
+			"fog" => 4,
+		},
+		"binds" => {
+			"+forward" => "w",
+			"-forward" => "s",
+			"+right" => "d",
+			"-right" => "a",
+			"jump" => "space",
+			"sneak" => "lctrl",
+			"sprint" => "lshift",
+			"interact" => "e",
+			"kick" => "g",
+		},
+		"mouse" => {
+			"sensx" => 0.8,
+			"sensy" => 0.8,
+			"invert_y" => false,
+		},
+		"player" => {
+			"yaw" => 89.065,
+			"pitch" => -40.625,
+			"inventory" => {
+				"slot1" => null,
+				"slot2" => null,
+				"slot3" => null,
+				"slot4" => null,
+				"slot5" => null,
+				"slot6" => null,
+				"slot7" => null,
+				"slot8" => null,
+				"slot9" => null,
+			},
+			"selected_slot" => "slot1",
+			"health" => 100,
+		},
+		"game" => {
+			"world" => "world1",
+			"time_of_day" => 3652.598,
+		},
+	}
+	let trailing_comma = {
+		1 => "a", 2 => "b", 3 => "c",
+	}
+end
+
+let function_literal() = do
+	let normal() = do end
+	let no_block() = null
+	let args(a1, a2, a3) = null
+	let lambda = fun -> null
+	let lambda_args = (fun a1, a2, a3 -> null)
+end
+
+let equality() = do
+	let values = [
+		null,
+		true,
+		333,
+		"hey",
+		["hi"],
+		{"a" => "b"},
+		Math.squared,
+		fun a, b -> a + b,
+	]
+	
+	List.iteri: values, (fun skip, value -> do
+		assert: value = value
+		List.iteri: values, (fun i, other -> if i != skip then
+			assert: value != other)
+	end)
+end
+
+let comparison() = do
+	let lo = -100
+	let hi = 100
+	assert: lo < hi
+	assert: lo <= hi
+	assert: lo <= lo
+	assert: hi > lo
+	assert: hi >= lo
+	assert: hi >= hi
+end
+
+let boolean_ops() = do
+	assert: true and true = true
+	assert: true and false = false
+	assert: true or false = true
+	assert: false or false = false
+	
+	let crash() = assert: false
+	false and call: crash
+	true or call: crash
+	
+	assert: not true = false
+	assert: not false = true
+end
+
+let math() = do
+	assert: 1 + 2 = 3
+	assert: 8 - 5 = 3
+	assert: 4 * 2 = 8
+	assert: 2 ^ 8 = 256
+	assert: 16 / 2 = 8
+	assert: 16 % 14 = 2
+	assert: -1 = 0 - 1
+	assert: 1 + 3 - 5 * 7 / 8 - -10 = 9.625
+end
+
+let vector_math() = do
+	assert: [1, 2, 3] + 10 = [11, 12, 13]
+	assert: [1, 2, 3] + [9, 8, 7] = [10, 10, 10]
+	
+	assert: [1, 2, 3] - 2 = [-1, 0, 1]
+	assert: [1, 2, 3] - [1, 2, 3] = [0, 0, 0]
+
+	assert: [1, 2, 3] * 10 = [10, 20, 30]
+	assert: [1, 2, 3] * [10, 100, 1000] = [10, 200, 3000]
+	
+	assert: [1, 2, 3] ^ 2 = [1, 4, 9]
+	assert: [1, 2, 3] ^ [4, 5, 6] = [1, 32, 729]
+	
+	assert: [1, 2, 3] / 2 = [0.5, 1, 1.5]
+	assert: [1, 2, 3] / [0.5, 0.5, 0.5] = [2, 4, 6]
+	
+	assert: [1, 2, 3] % 2 = [1, 0, 1]
+	assert: [1, 2, 3] % [0.75, 1.5, 2.25] = [0.25, 0.5, 0.75]
+end
+
+let invert() = do
+	assert: -1 = 0 - 1
+	assert: -"hello" = "olleh"
+	assert: -[1, 2, 3] = [3, 2, 1]
+	assert: -{1 => "a"} = {"a" => 1}
+end
+
+let assign() = do
+	let x = 0
+	
+	x <- 4
+	assert: x = 4
+	x += 1
+	assert: x = 5
+	x -= 2
+	assert: x = 3
+	x *= 10
+	assert: x = 30
+	x ^= 2
+	assert: x = 900
+	x /= 4
+	assert: x = 225
+	x %= 200
+	assert: x = 25
+	
+	let chain1 = 0
+	let chain2 = 0
+	let chain3 = 0
+	chain1 <- chain2 <- chain3 <- 7.5
+	assert: chain1 = 7.5
+	assert: chain2 = 7.5
+	assert: chain3 = 7.5
+end
+
+let concat() = do
+	assert: "Hello " & "World" = "Hello World"
+	assert: [1, 2] & 3 = [1, 2, 3]
+	assert: 1 & [2, 3] = [1, 2, 3]
+	assert: [1, 2] & [3] = [1, 2, 3]
+	assert: [1] & [2, 3] = [1, 2, 3]
+	assert: {1 => "a"} & {2 => "b"} = {1 => "a", 2 => "b"}
+end
+
+let blocks() = do
+	let empty = do end
+	assert: empty = null
+	
+	let value = do 1 end
+	assert: value = 1
+	
+	let variable = do
+		let x = 5
+		x
+	end
+	assert: variable = 5
+end
+
+let functions() = do
+	let empty() = do end
+	assert: (call: empty) = null
+	
+	let value() = 1
+	assert: (call: value) = 1
+	
+	let rec(i) = if i < 3 then rec: i + 1 else i
+	assert: (rec: 0) = 3
+	
+	let early_return() = do
+		let local = 3
+		if true then return 1
+		2
+	end
+	assert: (call: early_return) = 1
+
+	let value = 1
+	let a() = do
+		assert: value = 1
+		value <- 2
+	end
+	call: a
+	assert: value = 2
+	
+	let a() = do
+		let value = 1
+		let b() = do
+			value <- 2
+		end
+		call: b
+		value
+	end
+	assert: (call: a) = 2
+	
+	let a() = do
+		let value = 3
+		value
+	end
+	assert: (call: a) = 3
+end
+
+let dot() = do
+	let map = {"abc" => 123}
+	assert: map.abc = 123
+	map.abc <- 456
+	assert: map.abc = 456
+end
+
+let arrow() = do
+	let map = {
+		"xyz" => 456,
+		"abc" => (fun self -> assert: self.xyz = 456),
+		"rst" => (fun self, x, y -> assert: x + y = 5),
+	}
+	map->abc()
+	map->rst(2, 3)
+end
+
+let branches() = do
+	let value = if 1 = 1 then "A" else "B"
+	assert: value = "A"
+	
+	let value = if 1 = 0 then "A" else "B"
+	assert: value = "B"
+	
+	let value = if 1 = 0 then "A"
+	assert: value = null
+	
+	let value = if 1 = 2 then "A"
+		else if 1 = 1 then "B"
+		else if 1 = 0 then "C"
+	assert: value = "B"
+end
+
+let base_lib() = do
+	assert: (type_of: null) = "Null"
+	assert: (type_of: true) = "Bool"
+	assert: (type_of: 333) = "Number"
+	assert: (type_of: "hey") = "Text"
+	assert: (type_of: ["hi"]) = "List"
+	assert: (type_of: {"a" => "b"}) = "Map"
+	assert: (type_of: IO.print_ln) = "Function"
+	assert: (type_of: (fun a, b -> a + b)) = "Function"
+
+	assert: (to_num: null) = 0
+	assert: (to_num: false) = 0
+	assert: (to_num: true) = 1
+	assert: (to_num: "5") = 5
+	assert: (to_num: "$") = 0
+	assert: (to_num: [1, "23"]) = 123
+	
+	assert: (to_text: null) = "null"
+	assert: (to_text: true) = "true"
+	assert: (to_text: false) = "false"
+	assert: (to_text: 333) = "333"
+	assert: (to_text: "hey") = "hey"
+	assert: (to_text: ["hi"]) = "[\"hi\"]"
+	assert: (to_text: {"a" => "b"}) = "{\"a\" => \"b\"}"
+	assert: (to_text: IO.print_ln) = "print_ln"
+	assert: (to_text: (fun a, b -> a + b)) =
+		"testbench.lur/base_lib/?"
+	
+	let nums = []
+	repeat: 3, (fun i -> nums &= i)
+	assert: nums = [0, 1, 2]
+	
+	let nums = []
+	let index = 0
+	while: (fun -> do
+		nums &= index
+		index += 1
+		index < 3
+	end)
+	assert: nums = [0, 1, 2]
+	
+	let called = false
+	let function() = called <- true
+	call: function
+	assert: called
+	
+	assert: (range: 0, 3) = [0, 1, 2]
+	assert: (range: 0, -3) = [0, -1, -2]
+	assert: (range_inc: 0, 3) = [0, 1, 2, 3]
+	assert: (range_inc: 0, -3) = [0, -1, -2, -3]
+end
+
+let math_lib() = do
+	assert: (Math.eqf: Math.PI,
+		3.14159265358979323846264338327950288,
+		0.00001)
+	assert: (Math.eqf: Math.E,
+		2.71828182845904523536028747135266250,
+		0.00001)
+	assert: (Math.shl: 16, 8) = 4096
+	assert: (Math.shr: 4096, 8) = 16
+	assert: (Math.band: 24, 22) = 16
+	assert: (Math.bor: 23, 48) = 55
+	assert: (Math.xor: 40, 41) = 1
+	assert: (Math.bnot: 60) = -61
+	
+	assert: (Math.log: 64, 8) = 2
+	assert: (Math.sqrt: 4) = 2 and (Math.squared: 2) = 4
+	assert: (Math.abs: -1) = 1 and (Math.abs: 1) = 1
+	
+	assert: (Math.min: 4, 5) = 4
+	assert: (Math.max: 4, 5) = 5
+	
+	assert: (Math.clip: 3, 4, 5) = 4
+	assert: (Math.clip: 6, 4, 5) = 5
+	assert: (Math.clip: 4.5, 4, 5) = 4.5
+	
+	assert: (Math.lerp: 0.25, -10, 10) = -5
+	assert: (Math.lerp: 0.5, -10, 10) = 0
+	assert: (Math.lerp: 0.75, -10, 10) = 5
+	
+	assert: (Math.floor: 3.9) = 3
+	assert: (Math.ceil: 2.9) = 3
+	
+	assert: (Math.round: 3.45) = 3
+	assert: (Math.round: 3.55) = 4
+	assert: (Math.round: 3.5) = 4
+	
+	assert: (Math.eqf: (Math.rad: 45), 0.7853, 0.001)
+	assert: (Math.eqf: (Math.deg: 1), 57.2957, 0.001)
+	assert: (Math.eqf: (Math.sin: 30), -0.988, 0.001)
+	assert: (Math.eqf: (Math.cos: 30), 0.1542, 0.001)
+	assert: (Math.eqf: (Math.tan: 30), -6.405, 0.001)
+	assert: (Math.eqf: (Math.asin: 1), 1.5707, 0.001)
+	assert: (Math.eqf: (Math.acos: 1), 0, 0.001)
+	assert: (Math.eqf: (Math.atan: 1), 0.7853, 0.001)
+	assert: (Math.eqf: (Math.atan2: 3, 4), 0.6435, 0.001)
+	assert: (Math.eqf: (Math.sinh: 1), 1.1752, 0.001)
+	assert: (Math.eqf: (Math.cosh: 1), 1.5430, 0.001)
+	assert: (Math.eqf: (Math.tanh: 1), 0.7615, 0.001)
+	assert: (Math.eqf: (Math.asinh: 10), 2.9982, 0.001)
+	assert: (Math.eqf: (Math.acosh: 10), 2.9932, 0.001)
+	assert: (Math.eqf: (Math.atanh: 0.5), 0.5493, 0.001)
+	
+	assert: (Math.even: 2) and not (Math.even: 3)
+	assert: (Math.odd: 3) and not (Math.odd: 2)
+	
+	assert: (Math.hex: 0xff) = "0xff"
+	assert: (Math.bin: 0b11) = "0b11"
+	
+	assert: (Math.size: [3, 0, 0]) = 3
+	assert: (Math.norm: [3, 0, 0]) = [1, 0, 0]
+	
+	let v1 = [-1, 0, 0]
+	let v2 = [0.8, 0, 0]
+	assert: (Math.eqf: (Math.dot: v1, v2), -0.8, 0.001)
+	
+	let v1 = [3, 5, 4]
+	let v2 = [2, 7, 5]
+	assert: (Math.cross: v1, v2) = [-3, -7, 11]
+end
+
+let text_lib() = do
+	assert: Text.LETTERS =
+		"abcdefghijklmnopqrstuvwxyz"
+	assert: Text.DIGITS = "0123456789"
+	assert: Text.PUNCTUATION =
+		"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+	assert: Text.WHITESPACE = " \t\n\r"
+	assert: (Text.len: "three") = 5
+	assert: (Text.cmp: "Adam", "Benson") = "Adam"
+	assert: (Text.chars: "abc") = ["a", "b", "c"]
+	assert: (Text.ascii: "abc") = [97, 98, 99]
+	assert: (Text.slice: "accident", 3, 5) = "id"
+	assert: (Text.slice: "accident", -5, -3) = "id"
+	assert: (Text.split: "abc 123", " ") = ["abc", "123"]
+	assert: (Text.to_upper: "hi") = "HI"
+	assert: (Text.to_lower: "HI") = "hi"
+	assert: (Text.is_upper: "A") and not (Text.is_upper: "a")
+	assert: (Text.is_lower: "a") and not (Text.is_lower: "A")
+	assert: (Text.starts_with: "123", "1")
+	assert: (Text.ends_with: "123", "3")
+	assert: (Text.trim_left: " hi") = "hi"
+	assert: (Text.trim_right: "hi ") = "hi"
+	assert: (Text.trim: " hi ") = "hi"
+	assert: (Text.left_pad: "456", 6, "%") = "%%%456"
+	assert: (Text.right_pad: "327", 6 ,":") = "327:::"
+	assert: (Text.pad: "48", 6, ".") = "..48.."
+	assert: (Text.edit_dist: "golden", "ffolden") = 13
+	assert: (Text.find: "silver gold", "gold", 0) = 7
+	assert: (Text.rep_all: 
+		"silver gold silver", "silver", "bronze") =
+		"bronze gold bronze"
+end
+
+let list_lib() = do
+	let list = [1, 2]
+	assert: (List.len: list) = 2
+	
+	assert: (List.get: list, 0) = 1
+	assert: (List.get: list, -1) = 2
+	List.set: list, 0, 3 
+	List.set: list, -1, 4
+	assert: (List.get: list, 0) = 3
+	assert: (List.get: list, -1) = 4
+	
+	let empty = []
+	List.insert: empty, 0, 1
+	assert: empty = [1]
+	
+	let ls = [1, 3]
+	
+	List.insert: ls, 1, 2
+	List.insert: ls, -1, 4
+	assert: ls = [1, 2, 3, 4]
+	
+	List.del: ls, 0
+	List.del: ls, -1
+	assert: ls = [2, 3]
+	
+	let value = List.pop: ls
+	assert: value = 3 and ls = [2]
+	
+	let x = [1, 2, 3, 4, 5]
+	assert: (List.head: x) = 1
+	assert: (List.tail: x) = [2, 3, 4, 5]
+	assert: (List.last: x) = 5
+	
+	let init = List.fill: 4, (fun _ -> 5)
+	assert: init = [5, 5, 5, 5]
+	
+	let init2 = List.fill: 4, (fun i -> i + 1)
+	assert: init2 = [1, 2, 3, 4]
+	
+	let rep = List.repeat: [0, 1], 4
+	assert: rep = [0, 1, 0, 1, 0, 1, 0, 1]
+	
+	assert: (List.count: [0, 1, 1, 0, 1, 1, 0, 0], 1) = 4
+	
+	let ls = [1, 2]
+	assert: List.contains: ls, 1
+	assert: not List.contains: ls, 3
+	
+	assert: (List.find: [1, 2, 3], 2, 0) = 1
+	assert: (List.find: [1, 2, 3], 2, 2) = null
+	
+	let nums = [1, 2, 3]
+	let total = 0
+	List.iter: nums, (fun num -> total += num)
+	assert: total = 6
+	
+	let nums = [1, 2, 3]
+	List.iteri: nums, (fun i, num -> do
+		assert: i = num - 1
+		assert: (List.get: nums, i) = num
+	end)
+	
+	assert: (List.map: [1, 2, 3], Math.squared) = [1, 4, 9]
+	assert: (List.filter: [1, 2, 3], Math.even) = [2]
+	assert: (List.fold: [1, 2, 3], 1, (fun a, b -> a + b)) = 7
+	assert: (List.flat: [1, [2], [3, [4]]]) = [1, 2, 3, 4]
+	assert: (List.dedup: [1, 1, 1, 0]) = [1, 0]
+	assert: (List.sum: [1, 2, 3]) = 6
+	assert: (List.average: [1, 2, 3]) = 2
+	
+	let a = [10, 2, 30]
+	assert: (List.mean: a) = 2
+	
+	let b = [10, 2, 3, 40]
+	assert: (List.mean: b) = (2 + 3) / 2
+	
+	assert: List.any: [4, 5, 6], (fun x -> x > 5)
+	assert: not List.any: [4, 5, 6], (fun x -> x > 6)
+	assert: List.all: [1, 1, 1], (fun x -> x = 1)
+	assert: not List.all: [1, 0, 1], (fun x -> x = 1)
+	
+	assert: (List.sort: []) = []
+	assert: (List.sort: [1]) = [1]
+	assert: (List.sort: [3, 2, 1]) = [1, 2, 3]
+	assert: (List.sort: ["James", "Aqua"]) = ["Aqua", "James"]
+	
+	assert: (List.swap: [1, 2], 0, 1) = [2, 1]
+	assert: (List.swap: [1, 2], -1, -2) = [2, 1]
+	
+	assert: (List.join: []) = ""
+	assert: (List.join: ["a+", "b+", "c"]) = "a+b+c"
+	
+	let a = [1, 4, 7, 9]
+	let b = [2, 5, 8]
+	let c = [3, 6]
+	assert: (List.zip: [a, b, c]) = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	
+	let vertices = [
+		-0.5, 0.5, 0.0,
+		0.5, 0.5, 0.0,
+		-0.5, -0.5, 0.0
+	]
+	let chunks = List.chunk: vertices, 3
+	assert: (List.get: chunks, 0) = [-0.5, 0.5, 0.0]
+	assert: (List.get: chunks, 1) = [0.5, 0.5, 0.0]
+	assert: (List.get: chunks, 2) = [-0.5, -0.5, 0.0]
+	assert: (List.chunk: [], 1) = []
+end
+
+let map_lib() = do
+	let map = {123 => "abc"}
+	assert: (Map.len: map) = 1
+	
+	assert: (Map.get: map, 123) = "abc"
+	Map.set: map, 123, "xyz"
+	assert: (Map.get: map, 123) = "xyz"
+	
+	let test = {1 => "a", 2 => "b", 3 => "c"}
+	assert: (Map.has_key: test, 1)
+	assert: (Map.has_value: test, "a")
+	assert: (Map.keys: test) = [1, 2, 3]
+	assert: (Map.values: test) = ["a", "b", "c"]
+	
+	let pairs = [[1, "a"], [2, "b"], [3, "c"]]
+	assert: (Map.kv_pairs: test) = pairs
+	assert: (Map.from_kv_pairs: pairs) = test
+	
+	let pairs = []
+	Map.iter: test, (fun k, v -> pairs &= [[k, v]])
+	assert: pairs = [[1, "a"], [2, "b"], [3, "c"]]
+	
+	assert: (Map.get_or_default: test, 1, "d") = "a"
+	assert: (Map.get_or_default: test, 4, "e") = "e"
+end
+
+let io_lib() = do
+	let path = "test.txt"
+	let text = "hi"
+	let text2 = "\n123"
+	IO.write: path, text
+	assert: (IO.read: path) = text
+	
+	IO.append: path, text2
+	assert: (IO.read: path) = text & text2
+	assert: (IO.size: path) = Text.len: text & text2
+	
+	IO.del: path
+end
+
+let calculator() = do
+	let Op = enum: [
+		"Num",
+		"Add",
+		"Sub", 
+		"Mul",
+		"Pow",
+		"Div",
+		"Rem",
+		"Finish",
+	]
+	
+	let program = [
+		Op.Num, 128,
+		Op.Num, 2,
+		Op.Mul,
+		Op.Finish,
+	]
+	
+	let cur = 0
+	let stack = []
+	let result = null
+	
+	while: (fun -> do
+		let op = List.get: program, cur
+		cur += 1
+		
+		if op = Op.Num then do
+			stack &= List.get: program, cur
+			cur += 1
+		end
+		else if op = Op.Add then do
+			let b = List.pop: stack
+			let a = List.pop: stack
+			stack &= a + b
+		end
+		else if op = Op.Sub then do
+			let b = List.pop: stack
+			let a = List.pop: stack
+			stack &= a - b
+		end
+		else if op = Op.Mul then do
+			let b = List.pop: stack
+			let a = List.pop: stack
+			stack &= a * b
+		end
+		else if op = Op.Pow then do
+			let b = List.pop: stack
+			let a = List.pop: stack
+			stack &= a ^ b
+		end
+		else if op = Op.Div then do
+			let b = List.pop: stack
+			let a = List.pop: stack
+			if b = 0 then
+				error: "division by zero"
+			stack &= a / b
+		end
+		else if op = Op.Rem then do
+			let b = List.pop: stack
+			let a = List.pop: stack
+			if b = 0 then
+				error: "remainder of division by zero"
+			stack &= a % b
+		end
+		else if op = Op.Finish then do
+			result <- List.last: stack
+			return false
+		end
+		
+		true
+	end)
+	
+	assert: result = 256
+end
+
+let sorting() = do
+	let words = []
+	repeat: 1024, (fun _ -> words &=
+		Text.rand_text: (Math.rand: 3, 6), Text.LETTERS)
+	words <- List.sort: words
+end
+
+let tests = [
+	names,
+	null_literal,
+	bool_literal,
+	number_literal,
+	text_literal,
+	list_literal,
+	map_literal,
+	function_literal,
+	equality,
+	comparison,
+	boolean_ops,
+	math,
+	vector_math,
+	invert,
+	assign,
+	concat,
+	blocks,
+	functions,
+	dot,
+	arrow,
+	branches,
+	base_lib,
+	math_lib,
+	text_lib,
+	list_lib,
+	map_lib,
+	io_lib,
+	calculator,
+	sorting,
+]
+
+let run_times = 1
+
+IO.print_ln: "n=" & run_times
+let start = call: clock
+List.iter: tests, (fun test -> do
+	IO.print: (Text.right_pad: (to_text: test), 35, ".")
+		
+	let times = []
+	repeat: run_times, (fun _ -> do
+		let start = call: clock
+		call: test
+		times &= (call: clock) - start
+	end)
+	
+	let took = List.sum: times
+	IO.print_ln: "took " & took & "s"
+end)
+IO.print_ln: "success! took " & ((call: clock) - start) & "s"
