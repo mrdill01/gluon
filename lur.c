@@ -8,11 +8,14 @@
 #include <time.h>
 #include <math.h>
 #include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define LUR_VERSION "lur 1.0"
 #define LUR_VERSION_MAJ 1
 #define LUR_VERSION_MIN 0
-#define LUR_VERSION_REV 0
+#define LUR_VERSION_PATCH 0
 
 #define LUR_DEBUG_ASSERTS 1
 #define LUR_DEBUG_PRINT_CODE 0
@@ -22,9 +25,11 @@
 #define LUR_DEBUG_PRINT_TOKENS 0
 #define LUR_DEBUG_PRINT_ALLOCS 0
 #define LUR_DEBUG_PRINT_MEM_STATS 0
-#define LUR_DEBUG_DISABLE_GC 0
+#define LUR_DEBUG_DISABLE_GC 1
 
 #define lur_printf printf
+#define lur_eprintf printf
+#define lur_dprintf printf
 
 #define INIT_ARRAY_CAP 8
 #define MAP_MAX_LOAD 0.75
@@ -37,7 +42,7 @@
 #define MAX_JUMP UINT16_MAX
 #define MAX_ARGS UINT8_MAX
 #define MAX_VREFS UINT8_MAX
-#define MAX_LIST_LIT_ITEMS UINT16_MAX
+#define MAX_ARRAY_LIT_ITEMS UINT16_MAX
 #define MAX_MAP_LIT_ITEMS UINT16_MAX
 #define MAX_ERR_MSG 2048
 
@@ -58,9 +63,14 @@
 		(got)->len, (got)->buffer
 #define ERR_UNTERMINATED_TEXT \
 	"unterminated text"
+#define ERR_INVALID_ESCAPE(ch) \
+	"invalid escape sequence: '\\%c'", (ch)
 #define ERR_TYPECHECK(got, wanted) \
 	"got type %s but expected %s", \
 		type_name(got), type_name(wanted)
+#define ERR_TYPECHECK_ARG(got, wanted, arg) \
+	"got type %s for arg #%d but expected %s", \
+		type_name(got), (arg), type_name(wanted)
 #define ERR_UNDEFINED(name, ctx) \
 	"undefined variable: '%.*s'", \
 		value_to_text(name, ctx)->len, \
@@ -79,8 +89,8 @@
 		(fname)->buffer, \
 		(got), ((got) == 1) ? "" : "s", \
 		(wanted)
-#define ERR_INVALID_ESCAPE(ch) \
-	"invalid escape sequence: '\\%c'", (ch)
+#define ERR_NOT_IMPLEMENTED(what) \
+	"%s not implemented", (what)
 #define ERR_DIV_BY_ZERO \
 	"division by zero"
 #define ERR_REMAINDER_OF_DIV_BY_ZERO \
@@ -107,7 +117,7 @@
 typedef enum {
 	OP_NOP,
 	OP_DATA,
-	OP_NEWLIST,
+	OP_NEWARRAY,
 	OP_NEWMAP,
 	OP_NEWFREF,
 	OP_NEWVREF,
@@ -155,7 +165,7 @@ typedef struct {
 static opinfo_t OPINFO[] = {
 	[OP_NOP] = {"nop", 0},
 	[OP_DATA] = {"data", 2},
-	[OP_NEWLIST] = {"newlist", 2},
+	[OP_NEWARRAY] = {"newarray", 2},
 	[OP_NEWMAP] = {"newmap", 2},
 	[OP_NEWFREF] = {"newfref", 2},
 	[OP_NEWVREF] = {"newvref", 0},
@@ -196,11 +206,11 @@ static opinfo_t OPINFO[] = {
 };
 
 typedef enum {
-	TYPE_NULL,
+	TYPE_NONE,
 	TYPE_BOOL,
 	TYPE_NUMBER,
 	TYPE_TEXT,
-	TYPE_LIST,
+	TYPE_ARRAY,
 	TYPE_MAP,
 	TYPE_FUNC,
 	TYPE_FREF,
@@ -234,7 +244,7 @@ typedef struct {
 	obj_t obj;
 	value_t* items;
 	size_t len;
-} list_t;
+} array_t;
 
 typedef struct {
 	value_t key;
@@ -261,7 +271,6 @@ typedef struct {
 	size_t nlines;
 	size_t nvrefs;
 	const text_t* name;
-	const text_t* src;
 	uint8_t argc;
 	syscall_fn_t syscall;
 } func_t;
@@ -280,16 +289,16 @@ typedef struct vref_t {
 	struct vref_t* next;
 } vref_t;
 
-#define make_null() \
-	(value_t){TYPE_NULL, {.num = 0}}
+#define make_none() \
+	(value_t){TYPE_NONE, {.num = 0}}
 #define make_bool(value) \
 	(value_t){TYPE_BOOL, {.q = (value)}}
 #define make_number(value) \
 	(value_t){TYPE_NUMBER, {.num = (value)}}
 #define make_text(value) \
 	(value_t){TYPE_TEXT, {.obj = (obj_t*)(value)}}
-#define make_list(value) \
-	(value_t){TYPE_LIST, {.obj = (obj_t*)(value)}}
+#define make_array(value) \
+	(value_t){TYPE_ARRAY, {.obj = (obj_t*)(value)}}
 #define make_map(value) \
 	(value_t){TYPE_MAP, {.obj = (obj_t*)(value)}}
 #define make_function(value) \
@@ -305,8 +314,8 @@ typedef struct vref_t {
 	((value).data.num)
 #define get_text(value) \
 	((text_t*)((value).data.obj))
-#define get_list(value) \
-	((list_t*)((value).data.obj))
+#define get_array(value) \
+	((array_t*)((value).data.obj))
 #define get_map(value) \
 	((map_t*)((value).data.obj))
 #define get_func(value) \
@@ -340,7 +349,7 @@ typedef struct {
 
 typedef enum {
 	T_NAME,
-	T_NULL,
+	T_NONE,
 	T_TRUE,
 	T_FALSE,
 	T_NUMBER,
@@ -406,7 +415,7 @@ typedef struct ast_node_t ast_node_t;
 
 typedef enum {
 	AST_VALUE,
-	AST_LIST,
+	AST_ARRAY,
 	AST_MAP,
 	AST_BIND,
 	AST_LOAD,
@@ -429,7 +438,7 @@ typedef struct {
 typedef struct {
 	ast_node_t** items;
 	size_t len;
-} ast_list_t;
+} ast_array_t;
 
 typedef struct {
 	ast_node_t** keys;
@@ -511,7 +520,7 @@ typedef struct ast_node_t {
 	uint8_t tag;
 	union {
 		ast_value_t value;
-		ast_list_t list;
+		ast_array_t array;
 		ast_map_t map;
 		ast_bind_t bind;
 		ast_load_t load;
@@ -565,7 +574,7 @@ static ast_node_t* ps_null(parser_t*);
 static ast_node_t* ps_boolean(parser_t*);
 static ast_node_t* ps_number(parser_t*);
 static ast_node_t* ps_text(parser_t*);
-static ast_node_t* ps_list(parser_t*);
+static ast_node_t* ps_array(parser_t*);
 static ast_node_t* ps_map(parser_t*);
 static ast_node_t* ps_bind(parser_t*);
 static ast_node_t* ps_unary(parser_t*);
@@ -582,7 +591,7 @@ static ast_node_t* ps_arrow(parser_t*);
 static parse_rule_t RULES[] = {
 	[T_NAME] = 
 		{ps_name, NULL, PREC_NONE},
-	[T_NULL] =
+	[T_NONE] =
 		{ps_null, NULL, PREC_NONE},
 	[T_TRUE] =
 		{ps_boolean, NULL, PREC_NONE},
@@ -645,7 +654,7 @@ static parse_rule_t RULES[] = {
 	[T_RPAREN] =
 		{NULL, NULL, PREC_NONE},
 	[T_LSQUARE] =
-		{ps_list, NULL, PREC_NONE},
+		{ps_array, NULL, PREC_NONE},
 	[T_RSQUARE] =
 		{NULL, NULL, PREC_NONE},
 	[T_LCURLY] =
@@ -758,6 +767,7 @@ static unsigned nextpow2(unsigned n) {
 }
 
 static void text_print(const text_t*);
+static void text_eprint(const text_t* text);
 static void print_stack_trace(const lur_t*);
 
 static void error(lur_t* ctx, const char* msg, ...) {
@@ -778,10 +788,10 @@ static void error(lur_t* ctx, const char* msg, ...) {
 		ctx->vm.fp->ip - func->ops];
 	else line = ctx->cl.parser.prev.line;
 	
-	lur_printf("[");
-	text_print(func->name);
-	lur_printf(":%d] ", line);
-	lur_printf("error: %s\n", buffer);
+	lur_eprintf("[");
+	text_eprint(func->name);
+	lur_eprintf(":%d] ", line);
+	lur_eprintf("error: %s\n", buffer);
 	
 	if (ctx->running) {
 		print_stack_trace(ctx);
@@ -799,12 +809,12 @@ static void print_stack_trace(const lur_t* ctx) {
 	if (cur == end)
 		return;
 	
-	lur_printf("[ stack trace: ]\n");
+	lur_eprintf("[ stack trace: ]\n");
 	int index = 0;
 	do {
-		lur_printf("%d: ", index);
-		text_print(cur->func->name);
-		lur_printf("\n");
+		lur_eprintf("%d: ", index);
+		text_eprint(cur->func->name);
+		lur_eprintf("\n");
 		cur--;
 		index++;
 	} while (cur > end);
@@ -822,7 +832,7 @@ static void* mem_resize(
 	
 	#if LUR_DEBUG_PRINT_ALLOCS
 	if (ctx && p != ctx)
-		lur_printf("[mem: %+d - %s:%llu - %p]\n",
+		lur_dprintf("[mem: %+d - %s:%llu - %p]\n",
 			ns - os, func, line, p);
 	#endif
 		
@@ -866,7 +876,7 @@ static obj_t* obj_new(size_t size, type_t tag, lur_t* ctx) {
 }
 
 static void text_free(text_t*, lur_t*);
-static void list_free(list_t*, lur_t*);
+static void array_free(array_t*, lur_t*);
 static void map_free(map_t*, lur_t*);
 static void func_free(func_t*, lur_t*);
 static void fref_free(fref_t*, lur_t*);
@@ -876,7 +886,7 @@ static void obj_free(obj_t* obj, lur_t* ctx) {
 	assert(obj && ctx);
 	switch (obj->tag) {
 	case TYPE_TEXT: text_free((text_t*)obj, ctx); break;
-	case TYPE_LIST: list_free((list_t*)obj, ctx); break;
+	case TYPE_ARRAY: array_free((array_t*)obj, ctx); break;
 	case TYPE_MAP: map_free((map_t*)obj, ctx); break;
 	case TYPE_FUNC: func_free((func_t*)obj, ctx); break;
 	case TYPE_FREF: fref_free((fref_t*)obj, ctx); break;
@@ -1011,6 +1021,57 @@ static text_t* text_escape(const text_t* input, lur_t* ctx)
 	return output;
 }
 
+static int64_t text_find_cstr(
+	const text_t* text,
+	const char* find,
+	size_t find_len,
+	size_t start)
+{
+	for (size_t i = start; i < text->len; i++) {
+		bool match = i <= text->len - find_len &&
+			strncmp(find, (const char*)text->buffer + i, find_len)
+				== 0;
+				
+		if (match)
+			return i;
+	}
+	
+	return -1;
+}
+
+static int64_t text_find(
+	const text_t* text, const text_t* find, size_t start)
+{
+	return text_find_cstr(text, find->buffer, find->len, start);
+}
+
+static text_t* text_replace_all(
+	const text_t* text,
+	const text_t* find,
+	const text_t* rep,
+	lur_t* ctx)
+{
+	text_t* output = text_new(NULL, 0, ctx);
+	
+	for (size_t i = 0; i < text->len; i++) {
+		bool match = i <= text->len - find->len &&
+			strncmp(
+				(const char*)find->buffer,
+				(const char*)text->buffer + i,
+				find->len) == 0;
+				
+		if (match) {
+			i += find->len - 1;
+			output = text_concat(output, rep, ctx);
+			continue;
+		}
+		
+		text_push(output, text->buffer[i], ctx);
+	}
+	
+	return output;
+}
+
 static text_t* text_reverse(const text_t* text, lur_t* ctx) {
 	assert(text && ctx);
 	gc_pause(ctx);
@@ -1064,53 +1125,59 @@ static int32_t text_edit_distance(
 
 static void text_print(const text_t* text) {
 	assert(text);
-	lur_printf("%.*s", text->len, text->buffer);
+	lur_printf("%.*s", (int)text->len, text->buffer);
 }
 
-static list_t* list_new(lur_t* ctx) {
+static void text_eprint(const text_t* text) {
+	assert(text);
+	lur_dprintf("%.*s", (int)text->len, text->buffer);
+}
+
+static array_t* array_new(lur_t* ctx) {
 	assert(ctx);
-	list_t* list = (list_t*)obj_new(
-		sizeof(list_t), TYPE_LIST, ctx);
-	list->items = NULL;
-	list->len = 0;
-	return list;
+	array_t* array = (array_t*)obj_new(
+		sizeof(array_t), TYPE_ARRAY, ctx);
+	array->items = NULL;
+	array->len = 0;
+	return array;
 }
 
-static void list_push(list_t*, value_t, lur_t*);
+static void array_push(array_t*, value_t, lur_t*);
 
-static list_t* list_copy(const list_t* src, lur_t* ctx) {
+static array_t* array_copy(const array_t* src, lur_t* ctx) {
 	assert(src && ctx);
 	gc_pause(ctx);
 	
-	list_t* dst = list_new(ctx);
+	array_t* dst = array_new(ctx);
 	for (size_t i = 0; i < src->len; i++)
-		list_push(dst, src->items[i], ctx);
+		array_push(dst, src->items[i], ctx);
 		
 	gc_resume(ctx);
 	return dst;
 }
 
-static void list_free(list_t* list, lur_t* ctx) {
-	assert(list && ctx);
-	arr_free(ctx, list->items, value_t, nextpow2(list->len));
-	mem_free(ctx, list, sizeof(list));
+static void array_free(array_t* array, lur_t* ctx) {
+	assert(array && ctx);
+	arr_free(ctx,
+		array->items, value_t, nextpow2(array->len));
+	mem_free(ctx, array, sizeof(array));
 }
 
 static text_t* value_to_text(value_t, lur_t*);
 
-static size_t list_convert_index(
-	const list_t* list, double index, lur_t* ctx)
+static size_t array_convert_index(
+	const array_t* array, double index, lur_t* ctx)
 {
 	if (index < 0)
-		index = list->len + index;
-	if (index >= list->len)
+		index = array->len + index;
+	if (index >= array->len)
 		error(ctx, ERR_INDEX(make_number(index)));
 	return index;
 }
 
 static bool value_eq(value_t, value_t);
 
-static bool list_eq(const list_t* a, const list_t* b) {
+static bool array_eq(const array_t* a, const array_t* b) {
 	assert(a && b);
 	if (a == b) return true;
 	if (a->len != b->len) return false;
@@ -1120,92 +1187,94 @@ static bool list_eq(const list_t* a, const list_t* b) {
 	return true;
 }
 
-static void list_push(list_t* list, value_t value, lur_t* ctx) {
-	assert(list && ctx);
-	arr_alloc(ctx, list->items, value_t,
-		nextpow2(list->len), nextpow2(list->len + 1));
-	list->items[list->len++] = value;
+static void array_push(
+	array_t* array, value_t value, lur_t* ctx)
+{
+	assert(array && ctx);
+	arr_alloc(ctx, array->items, value_t,
+		nextpow2(array->len), nextpow2(array->len + 1));
+	array->items[array->len++] = value;
 }
 
-static value_t list_pop(list_t* list, lur_t* ctx) {
-	assert(list && ctx);
-	if (list->len == 0)
+static value_t array_pop(array_t* array, lur_t* ctx) {
+	assert(array && ctx);
+	if (array->len == 0)
 		error(ctx, ERR_INDEX(make_number(0)));
 	
-	value_t value = list->items[list->len - 1];
-	arr_alloc(ctx, list->items, value_t,
-		nextpow2(list->len), nextpow2(--list->len));
+	value_t value = array->items[array->len - 1];
+	arr_alloc(ctx, array->items, value_t,
+		nextpow2(array->len), nextpow2(--array->len));
 	return value;
 }
 
-static void list_insert(
-	list_t* list, size_t index, value_t value, lur_t* ctx)
+static void array_insert(
+	array_t* array, size_t index, value_t value, lur_t* ctx)
 {
-	assert(list && ctx);
-	if (list->len == 0) {
-		list_push(list, value, ctx);
+	assert(array && ctx);
+	if (array->len == 0) {
+		array_push(array, value, ctx);
 		return;
 	}
 	
-	arr_alloc(ctx, list->items, value_t,
-		nextpow2(list->len), nextpow2(list->len++));
-	for (int64_t i = list->len - 1; i > index; i--)
-		list->items[i] = list->items[i - 1];
+	arr_alloc(ctx, array->items, value_t,
+		nextpow2(array->len), nextpow2(array->len++));
+	for (int64_t i = array->len - 1; i > index; i--)
+		array->items[i] = array->items[i - 1];
 	
-	list->items[index] = value;
+	array->items[index] = value;
 }
 
-static void list_del(
-	list_t* list, size_t index, lur_t* ctx)
+static void array_del(
+	array_t* array, size_t index, lur_t* ctx)
 {
-	assert(list && ctx);
-	if (list->len == 0) return;
-	for (int64_t i = index; i < list->len - 1; i++)
-		list->items[i] = list->items[i + 1];
+	assert(array && ctx);
+	if (array->len == 0) return;
+	for (int64_t i = index; i < array->len - 1; i++)
+		array->items[i] = array->items[i + 1];
 	
-	arr_alloc(ctx, list->items, value_t,
-		nextpow2(list->len), nextpow2(--list->len));
+	arr_alloc(ctx, array->items, value_t,
+		nextpow2(array->len), nextpow2(--array->len));
 }
 
-static list_t* list_concat(
-	const list_t* a, const list_t* b, lur_t* ctx)
+static array_t* array_concat(
+	const array_t* a, const array_t* b, lur_t* ctx)
 {
 	assert(a && b && ctx);
 	gc_pause(ctx);
-	list_t* result = list_new(ctx);
+	array_t* result = array_new(ctx);
 	for (size_t i = 0; i < a->len; i++)
-		list_push(result, a->items[i], ctx);
+		array_push(result, a->items[i], ctx);
 	for (size_t i = 0; i < b->len; i++)
-		list_push(result, b->items[i], ctx);
+		array_push(result, b->items[i], ctx);
 	gc_resume(ctx);
 	return result;
 }
 
-static list_t* list_repeat(
-	const list_t* target, size_t times, lur_t* ctx)
+static array_t* array_repeat(
+	const array_t* target, size_t times, lur_t* ctx)
 {
 	assert(target && target > 0 && ctx);
 	gc_pause(ctx);
 	
-	list_t* list = list_copy(target, ctx);
+	array_t* array = array_copy(target, ctx);
 	for (size_t i = 0; i < times - 1; i++)
-		list = list_concat(list, target, ctx);
+		array = array_concat(array, target, ctx);
 		
 	gc_resume(ctx);
-	return list;
+	return array;
 }
 
-static void list_swap(list_t* list, size_t a, size_t b) {
-	assert(list && a < list->len && b < list->len);
-	value_t temp = list->items[a];
-	list->items[a] = list->items[b];
-	list->items[b] = temp;
+static void array_swap(array_t* array, size_t a, size_t b) {
+	assert(array && a < array->len && b < array->len);
+	value_t temp = array->items[a];
+	array->items[a] = array->items[b];
+	array->items[b] = temp;
 }
 
-static bool list_contains(list_t* list, value_t item) {
-	assert(list);
-	for (size_t i = 0; i < list->len; i++) {
-		if (value_eq(list->items[i], item))
+static bool array_contains(array_t* array, value_t item) {
+	assert(array);
+	for (size_t i = 0; i < array->len; i++) {
+		if (value_eq(array->items[i], item))
 			return true;
 	}
 	return false;
@@ -1213,84 +1282,109 @@ static bool list_contains(list_t* list, value_t item) {
 
 static const char* type_name(type_t type);
 static value_t value_math(value_t, value_t, int, lur_t*);
+value_t lur_call_function(
+	lur_t*, const fref_t*, value_t*, size_t);
 
-static void list_sort_impl(
-	list_t* list, size_t n, lur_t* ctx)
+static void array_sort_impl(
+	array_t* array, size_t n, fref_t* by, lur_t* ctx)
 {
-	assert(list && ctx);
+	assert(array && by && ctx);
 	size_t swapped = 0;
 	for (size_t i = 0; i < n - 1; i++) {
-		value_t a = list->items[i];
-		value_t b = list->items[i + 1];
+		value_t a = array->items[i];
+		value_t b = array->items[i + 1];
 		
-		bool swap = false;
-		if (a.tag == TYPE_NUMBER) {
-			if (b.tag != TYPE_NUMBER) \
-				error(ctx, ERR_TYPECHECK(
-					b.tag, TYPE_NUMBER));
-			
-			swap = get_bool(value_math(a, b, OP_GT, ctx));
-		} else if (a.tag == TYPE_TEXT) {
-			if (b.tag != TYPE_TEXT) \
-				error(ctx, ERR_TYPECHECK(b.tag, TYPE_TEXT));
-			
-			swap = text_cmp(get_text(a), get_text(b)) ==
-				get_text(b);
-		}
+		value_t args[] = {a, b};
+		value_t result = lur_call_function(ctx, by, args, 2);
+		bool swap = value_eq(result, b) ;
 		
 		if (swap) {
-			list_swap(list, i, i + 1);
+			array_swap(array, i, i + 1);
 			swapped++;
 		}
 	}
 	
-	if (swapped != 0) list_sort_impl(list, n - 1, ctx);
+	if (swapped != 0) array_sort_impl(array, n - 1, by, ctx);
 }
 
-static list_t* list_sort(const list_t* input, lur_t* ctx) {
-	assert(input && ctx);
-	list_t* sorted = list_copy(input, ctx);
+static array_t* array_sort(
+	const array_t* input, fref_t* by, lur_t* ctx)
+{
+	assert(input && by && ctx);
+	array_t* sorted = array_copy(input, ctx);
 	if (sorted->len <= 1) return sorted;
-	list_sort_impl(sorted, sorted->len, ctx);
+	array_sort_impl(sorted, sorted->len, by, ctx);
 	return sorted;
 }
 
-static list_t* list_reverse(const list_t* list, lur_t* ctx) {
-	assert(list);
+static array_t* array_flat(const array_t* input, lur_t* ctx) {
+	assert(input && ctx);
+	array_t* output = array_new(ctx);
+	for (size_t i = 0; i < input->len; i++) {
+		value_t item = input->items[i];
+		if (item.tag == TYPE_ARRAY)
+			output = array_concat(output,
+				array_flat(get_array(item), ctx), ctx);
+		else
+			array_push(output, item, ctx);
+	}
+	return output;
+}
+
+static array_t* array_reverse(
+	const array_t* array, lur_t* ctx)
+{
+	assert(array);
 	gc_pause(ctx);
-	list_t* rev = list_new(ctx);
-	if (list->len == 0) return rev;
-	for (int64_t i = list->len - 1; i >= 0; i--)
-		list_push(rev, list->items[i], ctx);
+	array_t* rev = array_new(ctx);
+	if (array->len == 0) return rev;
+	for (int64_t i = array->len - 1; i >= 0; i--)
+		array_push(rev, array->items[i], ctx);
 	gc_resume(ctx);
 	return rev;
 }
 
 static text_t* value_to_text(value_t, lur_t*);
 
-static text_t* list_join(const list_t* list, lur_t* ctx) {
-	assert(list && ctx);
+static text_t* array_join(const array_t* array, lur_t* ctx) {
+	assert(array && ctx);
 	gc_pause(ctx);
 	text_t* text = text_new(NULL, 0, ctx);
-	for (size_t i = 0; i < list->len; i++)
+	for (size_t i = 0; i < array->len; i++)
 		text = text_concat(text, value_to_text(
-			list->items[i], ctx), ctx);
+			array->items[i], ctx), ctx);
 	gc_resume(ctx);
 	return text;
 }
 
-static list_t* list_flatten(list_t* input, lur_t* ctx) {
+static array_t* array_rotate_left(
+	const array_t* input, size_t n, lur_t* ctx)
+{
 	assert(input && ctx);
-	list_t* output = list_new(ctx);
-	for (size_t i = 0; i < input->len; i++) {
-		value_t item = input->items[i];
-		if (item.tag == TYPE_LIST)
-			output = list_concat(output,
-				list_flatten(get_list(item), ctx), ctx);
-		else
-			list_push(output, item, ctx);
+	array_t* array = array_copy(input, ctx);
+	for (size_t i = 0; i < n; i++) {
+		value_t temp = array->items[0];
+		for (size_t j = 0; j < array->len - 1; j++) {
+			array->items[j] = array->items[j + 1];
+		}
+		array->items[array->len - 1] = temp;
 	}
-	return output;
+	return array;
+}
+
+static array_t* array_rotate_right(
+	const array_t* input, size_t n, lur_t* ctx)
+{
+	assert(input && ctx);
+	array_t* array = array_copy(input, ctx);
+	for (size_t i = 0; i < n; i++) {
+		value_t temp = array->items[array->len - 1];
+		for (int64_t j = array->len - 1; j >= 0; j--) {
+			array->items[j] = array->items[j - 1];
+		}
+		array->items[0] = temp;
+	}
+	return array;
 }
 
 static map_t* map_new(lur_t* ctx) {
@@ -1317,8 +1411,8 @@ static bool map_eq(const map_t* a, const map_t* b) {
 	for (size_t i = 0; i < a->cap; i++) {
 		const map_entry_t* a_entry = &a->entries[i];
 		const map_entry_t* b_entry = &b->entries[i];
-		if (a_entry->key.tag == TYPE_NULL) continue;
-		if (b_entry->key.tag == TYPE_NULL) continue;
+		if (a_entry->key.tag == TYPE_NONE) continue;
+		if (b_entry->key.tag == TYPE_NONE) continue;
 		
 		if (!value_eq(a_entry->key, b_entry->key))
 			return false;
@@ -1340,7 +1434,7 @@ static map_entry_t* map_find_entry(
 	uint64_t index = hash & (cap - 1);
 	for (;;) {
 		const map_entry_t* entry = &entries[index];
-		if (entry->key.tag == TYPE_NULL ||
+		if (entry->key.tag == TYPE_NONE ||
 			value_eq(entry->key, key))
 			return (map_entry_t*)entry;
 		index = (index + 1) & (cap - 1);
@@ -1355,13 +1449,13 @@ static void map_set_cap(
 		ctx, sizeof(map_entry_t) * cap);
 	
 	for (size_t i = 0; i < cap; i++) {
-		entries[i].key = make_null();
-		entries[i].value = make_null();
+		entries[i].key = make_none();
+		entries[i].value = make_none();
 	}
 	
 	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* src = &map->entries[i];
-		if (src->key.tag == TYPE_NULL) continue;
+		if (src->key.tag == TYPE_NONE) continue;
 		
 		map_entry_t* dest = map_find_entry(
 			entries, cap, src->key, ctx);
@@ -1385,7 +1479,7 @@ static bool map_set(
 	
 	map_entry_t* entry = map_find_entry(
 		map->entries, map->cap, key, ctx);
-	bool is_new = entry->key.tag == TYPE_NULL;
+	bool is_new = entry->key.tag == TYPE_NONE;
 	if (is_new) map->len++;
 	
 	entry->key = key;
@@ -1404,7 +1498,7 @@ bool map_get(
 	
 	map_entry_t* entry = map_find_entry(
 		map->entries, map->cap, key, ctx);
-	if (entry->key.tag == TYPE_NULL) return false;
+	if (entry->key.tag == TYPE_NONE) return false;
 	
 	if (value)
 		*value = entry->value;
@@ -1417,7 +1511,7 @@ static void map_extend(
 	assert(src && dst && ctx);
 	for (size_t i = 0; i < src->cap; i++) {
 		const map_entry_t* entry = &src->entries[i];
-		if (entry->key.tag == TYPE_NULL) continue;
+		if (entry->key.tag == TYPE_NONE) continue;
 		map_set(dst, entry->key, entry->value, ctx);
 	}
 }
@@ -1431,7 +1525,7 @@ static map_t* map_reverse(
 	map_t* dst = map_new(ctx);
 	for (size_t i = 0; i < src->cap; i++) {
 		const map_entry_t* entry = &src->entries[i];
-		if (entry->key.tag == TYPE_NULL) continue;
+		if (entry->key.tag == TYPE_NONE) continue;
 		map_set(dst, entry->value, entry->key, ctx);
 	}
 	
@@ -1451,7 +1545,6 @@ static func_t* func_new(lur_t* ctx) {
 	func->nlines = 0;
 	func->nvrefs = 0;
 	func->name = NULL;
-	func->src = NULL;
 	func->argc = 0;
 	func->syscall = NULL;
 	return func;
@@ -1531,7 +1624,7 @@ static vref_t* vref_new(int index, lur_t* ctx) {
 	vref_t* vref = (vref_t*)obj_new(
 		sizeof(vref_t), TYPE_VREF, ctx);
 	vref->index = index;
-	vref->closed = make_null();
+	vref->closed = make_none();
 	vref->next = NULL;
 	return vref;
 }
@@ -1543,11 +1636,11 @@ static void vref_free(vref_t* vref, lur_t* ctx) {
 
 static const char* type_name(type_t type) {
 	switch (type) {
-	case TYPE_NULL: return "Null";
+	case TYPE_NONE: return "None";
 	case TYPE_BOOL: return "Bool";
 	case TYPE_NUMBER: return "Number";
 	case TYPE_TEXT: return "Text";
-	case TYPE_LIST: return "List";
+	case TYPE_ARRAY: return "Array";
 	case TYPE_MAP: return "Map";
 	case TYPE_FUNC: return "Function";
 	case TYPE_FREF: return "Function";
@@ -1560,11 +1653,11 @@ static const char* type_name(type_t type) {
 
 static bool type_is_obj(type_t type) {
 	switch (type) {
-	case TYPE_NULL:
+	case TYPE_NONE:
 	case TYPE_BOOL:
 	case TYPE_NUMBER: return false;
 	case TYPE_TEXT:
-	case TYPE_LIST:
+	case TYPE_ARRAY:
 	case TYPE_MAP:
 	case TYPE_FUNC:
 	case TYPE_FREF:
@@ -1583,15 +1676,15 @@ static text_t* value_to_text_ex(
 	gc_pause(ctx);
 	
 	switch (value.tag) {
-	case TYPE_NULL:
-		result = text_lit("null", ctx);
+	case TYPE_NONE:
+		result = text_lit("none", ctx);
 		break;
 	case TYPE_BOOL:
 		result = text_lit(
 			(get_bool(value)) ? "true" : "false", ctx);
 		break;
 	case TYPE_NUMBER:
-		result = text_fmt(ctx, "%.12g", get_number(value));
+		result = text_fmt(ctx, "%f", get_number(value));
 		break;
 	case TYPE_TEXT: {
 		if (quote_text) {
@@ -1601,20 +1694,20 @@ static text_t* value_to_text_ex(
 		} else result = get_text(value);
 		break;
 	}
-	case TYPE_LIST: {
-		const list_t* list = get_list(value);
+	case TYPE_ARRAY: {
+		const array_t* array = get_array(value);
 		result = text_lit("[", ctx);
 		size_t printed = 0;
-		for (size_t i = 0; i < list->len; i++) {
-			if (value_eq(list->items[i], value)) {
+		for (size_t i = 0; i < array->len; i++) {
+			if (value_eq(array->items[i], value)) {
 				printed++;
 				continue;
 			}
 			
 			result = text_concat(result, value_to_text_ex(
-				list->items[i], true, ctx), ctx);
+				array->items[i], true, ctx), ctx);
 			
-			if (printed < list->len - 1)
+			if (printed < array->len - 1)
 				result = text_concat(result, text_lit(", ", ctx), ctx);
 			printed++;
 		}
@@ -1627,7 +1720,7 @@ static text_t* value_to_text_ex(
 		size_t printed = 0;
 		for (size_t i = 0; i < map->cap; i++) {
 			const map_entry_t* entry = &map->entries[i];
-			if (entry->key.tag == TYPE_NULL) continue;
+			if (entry->key.tag == TYPE_NONE) continue;
 			if (value_eq(value, entry->value)) {
 				printed++;
 				continue;
@@ -1648,15 +1741,13 @@ static text_t* value_to_text_ex(
 	}
 	case TYPE_FUNC: {
 		const func_t* func = get_func(value);
-		result = text_fmt(ctx, "%.*s",
-			func->name->len, func->name->buffer);
+		result = text_fmt(ctx, "%.*s(%d)",
+			func->name->len, func->name->buffer, func->argc);
 		break;
 	}
 	case TYPE_FREF: {
 		const fref_t* fref = get_fref(value);
-		result = text_fmt(ctx, "%.*s",
-			fref->func->name->len,
-			fref->func->name->buffer);
+		result = value_to_text(make_function(fref->func), ctx);
 		break;
 	}
 	case TYPE_VREF: {
@@ -1690,13 +1781,14 @@ static void value_print(value_t value, lur_t* ctx) {
 static bool value_eq(value_t a, value_t b) {
 	if (a.tag != b.tag) return false;
 	switch (a.tag) {
-	case TYPE_NULL: return true;
+	case TYPE_NONE: return true;
 	case TYPE_BOOL: return get_bool(a) == get_bool(b);
 	case TYPE_NUMBER:
 		return get_number(a) == get_number(b);
 	case TYPE_TEXT:
 		return text_eq(get_text(a), get_text(b));
-	case TYPE_LIST: return list_eq(get_list(a), get_list(b));
+	case TYPE_ARRAY:
+		return array_eq(get_array(a), get_array(b));
 	case TYPE_MAP:
 		return map_eq(get_map(a), get_map(b));
 	case TYPE_FUNC: return get_func(a) == get_func(b);
@@ -1716,38 +1808,38 @@ static value_t vector_math(
 {
 	gc_pause(ctx);
 			
-	if (b.tag == TYPE_LIST) {
-		const list_t* v1 = get_list(a);
-		const list_t* v2 = get_list(b);
-		list_t* out = list_new(ctx);
+	if (b.tag == TYPE_ARRAY) {
+		const array_t* v1 = get_array(a);
+		const array_t* v2 = get_array(b);
+		array_t* out = array_new(ctx);
 		size_t shortest = (v1->len < v2->len) ?
 			v1->len : v2->len;
-				
+		
 		for (size_t i = 0; i < shortest; i++) {
 			typecheck(v1->items[i], TYPE_NUMBER);
-			typecheck(v2->items[i], TYPE_NUMBER);
-					
-			list_push(out, value_math(
-				v1->items[i], v2->items[i], op, ctx),
+			typecheck(v2->items[i], TYPE_NUMBER);	
+			array_push(out,
+				value_math(v1->items[i], v2->items[i], op, ctx),
 				ctx);
 		}
 				
 		gc_resume(ctx);
-		return make_list(out);
+		return make_array(out);
 	}
-			
+	
 	typecheck(b, TYPE_NUMBER);
-	const list_t* list = get_list(a);
-	list_t* out = list_new(ctx);
+	const array_t* array = get_array(a);
+	array_t* out = array_new(ctx);
 			
-	for (size_t i = 0; i < list->len; i++) {
-		typecheck(list->items[i], TYPE_NUMBER);
-		list_push(out, value_math(list->items[i], b, op, ctx),
+	for (size_t i = 0; i < array->len; i++) {
+		typecheck(array->items[i], TYPE_NUMBER);
+		array_push(out,
+			value_math(array->items[i], b, op, ctx),
 			ctx);
 	}
 			
 	gc_resume(ctx);
-	return make_list(out);
+	return make_array(out);
 }
 
 static value_t value_math(
@@ -1786,7 +1878,7 @@ static value_t value_math(
 		return make_bool(get_number(a) >= get_number(b));
 	}
 	case OP_ADD: {
-		if (a.tag == TYPE_LIST || b.tag == TYPE_LIST)
+		if (a.tag == TYPE_ARRAY || b.tag == TYPE_ARRAY)
 			return vector_math(a, b, op, ctx);
 		
 		typecheck(a, TYPE_NUMBER);
@@ -1795,7 +1887,7 @@ static value_t value_math(
 			get_number(a) + get_number(b));
 	}
 	case OP_SUB: {
-		if (a.tag == TYPE_LIST || b.tag == TYPE_LIST)
+		if (a.tag == TYPE_ARRAY || b.tag == TYPE_ARRAY)
 			return vector_math(a, b, op, ctx);
 		
 		typecheck(a, TYPE_NUMBER);
@@ -1804,7 +1896,7 @@ static value_t value_math(
 			get_number(a) - get_number(b));
 	}
 	case OP_MUL: {
-		if (a.tag == TYPE_LIST || b.tag == TYPE_LIST)
+		if (a.tag == TYPE_ARRAY || b.tag == TYPE_ARRAY)
 			return vector_math(a, b, op, ctx);
 		
 		typecheck(a, TYPE_NUMBER);
@@ -1813,7 +1905,7 @@ static value_t value_math(
 			get_number(a) * get_number(b));
 	}
 	case OP_POW: {
-		if (a.tag == TYPE_LIST || b.tag == TYPE_LIST)
+		if (a.tag == TYPE_ARRAY || b.tag == TYPE_ARRAY)
 			return vector_math(a, b, op, ctx);
 		
 		typecheck(a, TYPE_NUMBER);
@@ -1822,7 +1914,7 @@ static value_t value_math(
 			powf(get_number(a), get_number(b)));
 	}
 	case OP_DIV: {
-		if (a.tag == TYPE_LIST || b.tag == TYPE_LIST)
+		if (a.tag == TYPE_ARRAY || b.tag == TYPE_ARRAY)
 			return vector_math(a, b, op, ctx);
 		
 		typecheck(a, TYPE_NUMBER);
@@ -1833,7 +1925,7 @@ static value_t value_math(
 			get_number(a) / get_number(b));
 	}
 	case OP_REM: {
-		if (a.tag == TYPE_LIST || b.tag == TYPE_LIST)
+		if (a.tag == TYPE_ARRAY || b.tag == TYPE_ARRAY)
 			return vector_math(a, b, op, ctx);
 		
 		typecheck(a, TYPE_NUMBER);
@@ -1847,23 +1939,23 @@ static value_t value_math(
 		return make_number(result);
 	}
 	case OP_CON: {
-		if (a.tag == TYPE_LIST) {
+		if (a.tag == TYPE_ARRAY) {
 			gc_pause(ctx);
-			list_t* list = get_list(a);
-			if (b.tag == TYPE_LIST)
-				list = list_concat(list, get_list(b), ctx);
+			array_t* array = get_array(a);
+			if (b.tag == TYPE_ARRAY)
+				array = array_concat(array, get_array(b), ctx);
 			else
-				list_push(list, b, ctx);
+				array_push(array, b, ctx);
 			gc_resume(ctx);
-			return make_list(list);
+			return make_array(array);
 		} 
 			
-		if (b.tag == TYPE_LIST) {
+		if (b.tag == TYPE_ARRAY) {
 			gc_pause(ctx);
-			list_t* list = get_list(b);
-			list_insert(list, 0, a, ctx);
+			array_t* array = get_array(b);
+			array_insert(array, 0, a, ctx);
 			gc_resume(ctx);
-			return make_list(list);
+			return make_array(array);
 		}
 		
 		if (a.tag == TYPE_MAP && b.tag == TYPE_MAP) {
@@ -1886,8 +1978,8 @@ static value_t value_math(
 	case OP_INV: {
 		if (a.tag == TYPE_TEXT)
 			return make_text(text_reverse(get_text(a), ctx));
-		if (a.tag == TYPE_LIST)
-			return make_list(list_reverse(get_list(a), ctx));
+		if (a.tag == TYPE_ARRAY)
+			return make_array(array_reverse(get_array(a), ctx));
 		if (a.tag == TYPE_MAP)
 			return make_map(map_reverse(get_map(a), ctx));
 		typecheck(a, TYPE_NUMBER);
@@ -1896,7 +1988,7 @@ static value_t value_math(
 	default: unreachable();
 	}
 	
-	return make_null();
+	return make_none();
 }
 
 #undef typecheck
@@ -1949,17 +2041,17 @@ static void gc_mark_value(value_t value, lur_t* ctx) {
 static void gc_deep_mark_obj(obj_t* obj, lur_t* ctx) {
 	assert(obj && ctx);
 	switch (obj->tag) {
-		case TYPE_LIST: {
-			list_t* list = (list_t*)obj;
-			for (size_t i = 0; i < list->len; i++)
-				gc_mark_value(list->items[i], ctx);
+		case TYPE_ARRAY: {
+			array_t* array = (array_t*)obj;
+			for (size_t i = 0; i < array->len; i++)
+				gc_mark_value(array->items[i], ctx);
 			break;
 		}
 		case TYPE_MAP: {
 			map_t* map = (map_t*)obj;
 			for (size_t i = 0; i < map->cap; i++) {
 				map_entry_t* entry = &map->entries[i];
-				if (entry->key.tag == TYPE_NULL) continue;
+				if (entry->key.tag == TYPE_NONE) continue;
 				gc_mark_value(entry->key, ctx);
 				gc_mark_value(entry->value, ctx);
 			}
@@ -2109,14 +2201,14 @@ static void dbg_print_data(const vm_t* vm) {
 	assert(vm);
 	const func_t* func = vm->fp->func;
 	
-	lur_printf("data:\n");
+	lur_dprintf("data:\n");
 	for (size_t i = 0; i < func->ndata; i++) {
-		lur_printf("  %02x: %s = ",
+		lur_dprintf("  %02x: %s = ",
 			i, type_name(func->data[i].tag));
-		value_print_ex(func->data[i], true, vm->ctx);
-		lur_printf("\n");
+		value_dprint_ex(func->data[i], true, vm->ctx);
+		lur_dprintf("\n");
 	}
-	lur_printf("\n");
+	lur_dprintf("\n");
 }
 #endif
 
@@ -2124,12 +2216,12 @@ static void dbg_print_data(const vm_t* vm) {
 static void dbg_print_header(const vm_t* vm) {
 	assert(vm);
 	
-	lur_printf("\n[%d] ", vm->fp - vm->calls);
-	text_print(vm->fp->func->name);
-	lur_printf("\n");
+	lur_dprintf("\n[%d] ", vm->fp - vm->calls);
+	text_dprint(vm->fp->func->name);
+	lur_dprintf("\n");
 	
-	lur_printf("addr  line         name bytes      comment |\n");
-	lur_printf("-------------------------------------------|\n");
+	lur_dprintf("addr  line         name bytes      comment |\n");
+	lur_dprintf("-------------------------------------------|\n");
 }
 
 static void dbg_print_opcode(const vm_t* vm) {
@@ -2144,17 +2236,17 @@ static void dbg_print_opcode(const vm_t* vm) {
 	uint8_t opcode = *vm->fp->ip;
 	
 	if (prev_line != line || addr == 0)
-		lur_printf("%04d %5d %12s %02x",
+		lur_dprintf("%04d %5d %12s %02x",
 			addr, line, OPINFO[opcode].name, opcode);
 	else
-		lur_printf("%04d     | %12s %02x",
+		lur_dprintf("%04d     | %12s %02x",
 			addr, OPINFO[opcode].name, opcode);
 	
 	for (int i = 0; i < OPINFO[opcode].args; i++)
-		lur_printf(" %02x", vm->fp->ip[i + 1]);
+		lur_dprintf(" %02x", vm->fp->ip[i + 1]);
 		
 	for (int i = 0; i < 3 - OPINFO[opcode].args; i++)
-		lur_printf("   ");
+		lur_dprintf("   ");
 	
 	uint16_t u16arg = vm->fp->ip[1] << 8 | vm->fp->ip[2];
 	switch (opcode) {
@@ -2173,15 +2265,15 @@ static void dbg_print_opcode(const vm_t* vm) {
 		value_t a = vm->sp[-2];
 		value_t b = vm->sp[-1];
 		
-		lur_printf("[");
-		value_print(a, vm->ctx);
-		lur_printf(", ");
-		value_print(b, vm->ctx);
-		lur_printf("] -> [");
-		value_print(b, vm->ctx);
-		lur_printf(", ");
-		value_print(a, vm->ctx);
-		lur_printf("]");
+		lur_dprintf("[");
+		value_dprint(a, vm->ctx);
+		lur_dprintf(", ");
+		value_dprint(b, vm->ctx);
+		lur_dprintf("] -> [");
+		value_dprint(b, vm->ctx);
+		lur_dprintf(", ");
+		value_dprint(a, vm->ctx);
+		lur_dprintf("]");
 		break;
 	}
 	case OP_GETLOC: {
@@ -2203,7 +2295,7 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_GETGLOB: {
 		value_t key = vm->fp->func->data[u16arg];
 		value_print_ex(key, true, vm->ctx);
-		lur_printf(": ");
+		lur_dprintf(": ");
 		value_t value;
 		map_get(vm->globals, key, &value, vm->ctx);
 		value_print_ex(value, true, vm->ctx);
@@ -2212,14 +2304,14 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_SETGLOB: {
 		value_t value = vm->fp->func->data[u16arg];
 		value_print_ex(value, true, vm->ctx);
-		lur_printf(": ");
+		lur_dprintf(": ");
 		value_print_ex(vm->sp[-1], true, vm->ctx);
 		break;
 	}
 	case OP_ADDGLOB: {
 		value_t value = vm->fp->func->data[u16arg];
 		value_print_ex(value, false, vm->ctx);
-		lur_printf(": ");
+		lur_dprintf(": ");
 		value_t key = vm->fp->func->data[u16arg];
 		map_get(vm->globals, key, &value, vm->ctx);
 		value_print_ex(value, true, vm->ctx);
@@ -2228,10 +2320,10 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_GETVREF: {
 		vref_t* vref = vm->fp->fref->vrefs[u16arg];
 		if (vref->index == -1) {
-			lur_printf("(closed) ");
+			lur_dprintf("(closed) ");
 			value_print(vref->closed, vm->ctx);
 		} else {
-			lur_printf("(open) ");
+			lur_dprintf("(open) ");
 			value_print(vm->stack[vref->index], vm->ctx);
 		}
 		break;
@@ -2239,11 +2331,11 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_SETVREF: {
 		vref_t* vref = vm->fp->fref->vrefs[u16arg];
 		if (vref->index == -1) {
-			lur_printf("(closed) ");
-			value_print(vm->sp[-1], vm->ctx);
+			lur_dprintf("(closed) ");
+			value_dprint(vm->sp[-1], vm->ctx);
 		} else {
-			lur_printf("(open) ");
-			value_print(vm->sp[-1], vm->ctx);
+			lur_dprintf("(open) ");
+			value_dprint(vm->sp[-1], vm->ctx);
 		}
 		break;
 	}
@@ -2253,21 +2345,21 @@ static void dbg_print_opcode(const vm_t* vm) {
 		
 		assert(value.tag == TYPE_FREF);
 		const fref_t* fref = get_fref(vm->sp[-argc - 1]);
-		text_print(fref->func->name);
-		lur_printf(" (%d arg%c)",
+		text_dprint(fref->func->name);
+		lur_dprintf(" (%d arg%c)",
 			fref->func->argc,
 			(fref->func->argc == 1) ? '\0' : 's');
 		break;
 	}
 	case OP_RET: {
-		lur_printf("-> ");
-		value_print_ex(vm->sp[-1], true, vm->ctx);
+		lur_dprintf("-> ");
+		value_dprint_ex(vm->sp[-1], true, vm->ctx);
 		break;
 	}
 	}
 	
 	#if !LUR_DEBUG_PRINT_STACK
-	lur_printf("\n");
+	lur_dprintf("\n");
 	#endif
 }
 #endif
@@ -2279,14 +2371,14 @@ static void dbg_print_stack(const vm_t* vm) {
 	value_t* cur = vm->stack + vm->fp->slots;
 	value_t* end = vm->sp;
 	
-	lur_printf("\n\t [");
+	lur_dprintf("\n\t [");
 	while (cur != end) {
 		value_print_ex(*cur, true, vm->ctx);
 		cur++;
 		if (cur != end)
 			lur_printf(", ");
 	}
-	lur_printf("]\n");
+	lur_dprintf("]\n");
 }
 #endif
 
@@ -2356,14 +2448,14 @@ static value_t vm_launch(
 			push(vm->fp->func->data[read_u16()]);
 			break;
 		}
-		case OP_NEWLIST: {
+		case OP_NEWARRAY: {
 			gc_pause(vm->ctx);
 			uint16_t len = read_u16();
-			list_t* list = list_new(vm->ctx);
+			array_t* array = array_new(vm->ctx);
 			for (size_t i = 0; i < len; i++)
-				list_push(list, get(len - 1 - i), vm->ctx);
+				array_push(array, get(len - 1 - i), vm->ctx);
 			vm->sp -= len;
-			push(make_list(list));
+			push(make_array(array));
 			gc_resume(vm->ctx);
 			break;
 		}
@@ -2441,6 +2533,40 @@ static value_t vm_launch(
 			break;
 		}
 		case OP_GETFIELD: {
+			if (get(0).tag == TYPE_ARRAY) {
+				gc_pause(vm->ctx);
+				
+				const array_t* array = get_array(pop());
+				value_t key = vm->fp->func->data[read_u16()];
+				if (value_eq(key,
+					make_text(text_lit("x", vm->ctx))))
+				{
+					push(array->items[
+						array_convert_index(array, 0.0, vm->ctx)]);
+				} else if (value_eq(key,
+					make_text(text_lit("y", vm->ctx))))
+				{
+					push(array->items[
+						array_convert_index(array, 1.0, vm->ctx)]);
+				} else if (value_eq(key,
+					make_text(text_lit("z", vm->ctx))))
+				{
+					push(array->items[
+						array_convert_index(array, 2.0, vm->ctx)]);
+				} else if (value_eq(key,
+					make_text(text_lit("w", vm->ctx))))
+				{
+					push(array->items[
+						array_convert_index(array, 3.0, vm->ctx)]);
+				} else {
+					error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
+					unreachable();
+				}
+				
+				gc_resume(vm->ctx);
+				break;
+			}
+			
 			typecheck(0, TYPE_MAP);
 			map_t* map = get_map(get(0));
 			value_t key = vm->fp->func->data[read_u16()];
@@ -2452,6 +2578,46 @@ static value_t vm_launch(
 			break;
 		}
 		case OP_SETFIELD: {
+			if (get(1).tag == TYPE_ARRAY) {
+				gc_pause(vm->ctx);
+				
+				value_t value = pop();
+				const array_t* array = get_array(pop());
+				value_t key = vm->fp->func->data[read_u16()];
+				if (value_eq(key,
+					make_text(text_lit("x", vm->ctx))))
+				{
+					array->items[
+						array_convert_index(array, 0.0, vm->ctx)] =
+							value;
+				} else if (value_eq(key,
+					make_text(text_lit("y", vm->ctx))))
+				{
+					array->items[
+						array_convert_index(array, 1.0, vm->ctx)] =
+							value;
+				} else if (value_eq(key,
+					make_text(text_lit("z", vm->ctx))))
+				{
+					array->items[
+						array_convert_index(array, 2.0, vm->ctx)] =
+							value;
+				} else if (value_eq(key,
+					make_text(text_lit("w", vm->ctx))))
+				{
+					array->items[
+						array_convert_index(array, 3.0, vm->ctx)] =
+							value;
+				} else {
+					error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
+					unreachable();
+				}
+				
+				push(value);
+				gc_resume(vm->ctx);
+				break;
+			}
+			
 			typecheck(1, TYPE_MAP);
 			map_t* map = get_map(get(1));
 			value_t key = vm->fp->func->data[read_u16()];
@@ -2505,7 +2671,7 @@ static value_t vm_launch(
 		}
 		case OP_NOT: {
 			value_t value = pop();
-			push(value_math(value, make_null(), OP_NOT,
+			push(value_math(value, make_none(), OP_NOT,
 				vm->ctx));
 			break;
 		}
@@ -2522,12 +2688,14 @@ static value_t vm_launch(
 		case OP_CON: {
 			value_t b = pop();
 			value_t a = pop();
-			push(value_math(a, b, vm->fp->ip[-1], vm->ctx));
+			push(value_math(a, b,
+				vm->fp->ip[-1],
+				vm->ctx));
 			break;
 		}
 		case OP_INV: {
 			value_t value = pop();
-			push(value_math(value, make_null(), OP_INV,
+			push(value_math(value, make_none(), OP_INV,
 				vm->ctx));
 			break;
 		}
@@ -2567,7 +2735,7 @@ static value_t vm_launch(
 			#endif
 			#endif
 			
-			if (returns) return make_null();
+			if (returns) return make_none();
 			break;
 		}
 		case OP_HALT: {
@@ -2630,6 +2798,21 @@ static void vm_call(
 	#endif
 }
 
+value_t lur_call_function(
+	lur_t* ctx, const fref_t* fref, value_t* args, size_t argc)
+{
+	assert(ctx && fref);
+	if (args) {
+		for (size_t i = 0; i < argc; i++)
+			*ctx->vm.sp++ = args[i];
+	}
+	
+	if (fref->func->syscall)
+		vm_call(&ctx->vm, make_fref(fref), argc, false);
+	else vm_launch(&ctx->vm, make_fref(fref), argc, true);
+	return ctx->vm.sp[-1];
+}
+
 #undef read_u8
 #undef read_u16
 #undef push
@@ -2686,7 +2869,7 @@ static token_t sc_next(scanner_t* sc) {
 			(strlen(kw) == len && \
 				strncmp(start, kw, len) == 0)
 		
-		if (keyword("null")) return make(T_NULL);
+		if (keyword("none")) return make(T_NONE);
 		if (keyword("true")) return make(T_TRUE);
 		if (keyword("false")) return make(T_FALSE);
 		if (keyword("let")) return make(T_LET);
@@ -2710,10 +2893,11 @@ static token_t sc_next(scanner_t* sc) {
 		sc->pos++;
 		bool is_hex = (*sc->pos == 'x');
 		bool is_bin = (*sc->pos == 'b');
-		while ((isdigit(*sc->pos) ||
+		while (isdigit(*sc->pos) ||
 			*sc->pos == '.' ||
-			((is_hex || is_bin) && isalpha(*sc->pos))) &&
-			*sc->pos != '\0')
+			*sc->pos == '_' ||
+			((is_hex || is_bin) && isalpha(*sc->pos) &&
+			*sc->pos != '\0'))
 		{
 			sc->pos++;
 		}
@@ -2825,9 +3009,9 @@ static void ps_next(parser_t* ps) {
 	ps->cur = sc_next(&ps->scanner);
 	
 	#if LUR_DEBUG_PRINT_TOKENS
-	lur_printf("token: ");
-	text_print(ps->cur.lex);
-	lur_printf("\n");
+	lur_dprintf("token: ");
+	text_dprint(ps->cur.lex);
+	lur_dprintf("\n");
 	#endif
 }
 
@@ -2922,7 +3106,7 @@ static ast_node_t* ps_null(parser_t* ps) {
 	assert(ps);
 	ast_node_t* node = ps_new_node(ps);
 	node->tag = AST_VALUE;
-	node->data.value.data = make_null();
+	node->data.value.data = make_none();
 	return node;
 }
 
@@ -2940,21 +3124,22 @@ static ast_node_t* ps_number(parser_t* ps) {
 	ast_node_t* node = ps_new_node(ps);
 	node->tag = AST_VALUE;
 	
+	text_t* text = text_copy(ps->prev.lex, ps->ctx);
+	text = text_replace_all(
+		text, text_lit("_", ps->ctx), text_lit("", ps->ctx), ps->ctx);
+	
 	double num;
 	switch (ps->prev.tag) {
 	case T_NUMBER: {
-		num = strtof(
-			(const char*)ps->prev.lex->buffer, NULL);
+		num = strtof((const char*)text->buffer, NULL);
 		break;
 	}
 	case T_NUMBER_HEX: {
-		num = strtol(
-			(const char*)ps->prev.lex->buffer, NULL, 16);
+		num = strtol((const char*)text->buffer, NULL, 16);
 		break;
 	}
 	case T_NUMBER_BIN: {
-		num = strtol(
-			(const char*)ps->prev.lex->buffer, NULL, 2);
+		num = strtol( (const char*)text->buffer, NULL, 2);
 		break;
 	}
 	default: unreachable();
@@ -2976,21 +3161,21 @@ static ast_node_t* ps_text(parser_t* ps) {
 	return node;
 }
 
-static ast_node_t* ps_list(parser_t* ps) {
+static ast_node_t* ps_array(parser_t* ps) {
 	assert(ps);
 	ast_node_t* node = ps_new_node(ps);
-	node->tag = AST_LIST;
+	node->tag = AST_ARRAY;
 	
-	node->data.list.items = NULL;
-	node->data.list.len = 0;
+	node->data.array.items = NULL;
+	node->data.array.len = 0;
 	
 	while (!ps_check(ps, T_EOF) &&
 		!ps_check(ps, T_RSQUARE))
 	{
 		arr_alloc(ps->ctx,
-			node->data.list.items, ast_node_t*,
-			node->data.list.len, node->data.list.len + 1);
-		node->data.list.items[node->data.list.len++] =
+			node->data.array.items, ast_node_t*,
+			node->data.array.len, node->data.array.len + 1);
+		node->data.array.items[node->data.array.len++] =
 			ps_expr(ps);
 			
 		if (!ps_match(ps, T_COMMA))
@@ -2998,7 +3183,7 @@ static ast_node_t* ps_list(parser_t* ps) {
 	}
 	
 	ps_eat(ps, T_RSQUARE,
-		"expected ',' or ']' after list items");
+		"expected ',' or ']' after array items");
 	return node;
 }
 
@@ -3081,7 +3266,7 @@ static ast_node_t* ps_bind(parser_t* ps) {
 	node->tag = AST_BIND;
 	node->data.bind.name = ps->prev.lex;
 	
-	ps_eat(ps, T_EQ, "expected '=' after binding name");
+	ps_eat(ps, T_EQ, "expected '=' after variable name");
 	node->data.bind.value = ps_expr(ps);
 	return node;
 }
@@ -3556,17 +3741,17 @@ static void cl_compile_ast(
 		cl_push_value(cl, value->data);
 		break;
 	}
-	case AST_LIST: {
-		ast_list_t* list = &node->data.list;
-		if (list->len > MAX_LIST_LIT_ITEMS)
+	case AST_ARRAY: {
+		ast_array_t* array = &node->data.array;
+		if (array->len > MAX_ARRAY_LIT_ITEMS)
 			error(cl->ctx, ERR_LIMIT(
-				"list literal items", MAX_LIST_LIT_ITEMS));
+				"array literal items", MAX_ARRAY_LIT_ITEMS));
 		
-		for (size_t i = 0; i < list->len; i++)
-			cl_compile_ast(cl, list->items[i]);
-		cl_write(cl, OP_NEWLIST);
-		cl_write(cl, (list->len >> 8) & 0xff);
-		cl_write(cl, list->len & 0xff);
+		for (size_t i = 0; i < array->len; i++)
+			cl_compile_ast(cl, array->items[i]);
+		cl_write(cl, OP_NEWARRAY);
+		cl_write(cl, (array->len >> 8) & 0xff);
+		cl_write(cl, array->len & 0xff);
 		break;
 	}
 	case AST_MAP: {
@@ -3597,6 +3782,9 @@ static void cl_compile_ast(
 			cl_write(cl, (slot >> 8) & 0xff);
 			cl_write(cl, slot & 0xff);
 		}
+		
+		cl_write(cl, OP_DUP);
+		
 		break;
 	}
 	case AST_LOAD: {
@@ -3671,7 +3859,7 @@ static void cl_compile_ast(
 	case AST_BLOCK: {
 		ast_block_t* block = &node->data.block;
 		if (block->nitems == 0) {
-			cl_push_value(cl, make_null());
+			cl_push_value(cl, make_none());
 			break;
 		}
 			
@@ -3679,8 +3867,7 @@ static void cl_compile_ast(
 		for (size_t i = 0; i < block->nitems; i++) {
 			cl_compile_ast(cl, block->items[i]);
 			
-			if (block->items[i]->tag != AST_BIND &&
-				block->items[i]->tag != AST_FUN &&
+			if (block->items[i]->tag != AST_FUN &&
 				i != block->nitems - 1)
 			{
 				cl_write(cl, OP_POP);
@@ -3706,7 +3893,6 @@ static void cl_compile_ast(
 		env.func->name = text_concat(
 			env.func->name, fun->name, cl->ctx);
 			
-		env.func->src = cl->func->src;
 		env.func->argc = fun->nparams;
 		env.depth = cl->depth;
 		env.parent = cl;
@@ -3823,7 +4009,7 @@ static void cl_compile_ast(
 		cl_write(cl, OP_POP);
 		
 		if (branch->b) cl_compile_ast(cl, branch->b);
-		else cl_push_value(cl, make_null());
+		else cl_push_value(cl, make_none());
 		
 		cl_patch_jump(cl, skip_b);
 		cl_close_scope(cl);
@@ -3839,12 +4025,12 @@ static void cl_free_ast(
 	assert(cl && node);
 	switch (node->tag) {
 	case AST_VALUE: break;
-	case AST_LIST: {
-		ast_list_t* list = &node->data.list;
-		for (size_t i = 0; i < list->len; i++)
-			cl_free_ast(cl, list->items[i]);
+	case AST_ARRAY: {
+		ast_array_t* array = &node->data.array;
+		for (size_t i = 0; i < array->len; i++)
+			cl_free_ast(cl, array->items[i]);
 		arr_free(cl->ctx,
-			list->items, ast_node_t*, list->len);
+			array->items, ast_node_t*, array->len);
 		break;
 	}
 	case AST_MAP: {
@@ -3946,7 +4132,6 @@ static void cl_compile(
 	
 	ps_init(&cl->parser, src, cl->ctx);
 	cl->func->name = name;
-	cl->func->src = src;
 	ast_node_t* ast = ps_parse(&cl->parser);
 	cl_compile_ast(cl, ast);
 	
@@ -3957,7 +4142,7 @@ static void cl_compile(
 	if (cl->ctx->interpreter) {
 		size_t slot = func_write_value(
 			cl->func,
-			make_text(text_lit("IO", cl->ctx)),
+			make_text(text_lit("io", cl->ctx)),
 			cl->ctx);
 		cl_write(cl, OP_GETGLOB);
 		cl_write(cl, (slot >> 8) & 0xff);
@@ -3995,7 +4180,7 @@ static text_t* io_read(const text_t* path, lur_t* ctx) {
 	size_t len = ftell(fp);
 	fseek(fp, 0, SEEK_SET);
 	
-	text_t* text = text_new(NULL, len,  ctx);
+	text_t* text = text_new(NULL, len, ctx);
 	fread(text->buffer, 1, len, fp);
 	fclose(fp);
 	return text;
@@ -4047,24 +4232,28 @@ static size_t io_file_size(const text_t* path, lur_t* ctx) {
 	return len;
 }
 
+static const char* get_platform(void) {
+	#ifdef _WIN32
+    return "Windows 32-bit";
+    #elif _WIN64
+    return "Windows 64-bit";
+    #elif __APPLE__ || __MACH__
+    return "Mac OSX";
+    #elif __linux__
+    return "Linux";
+    #elif __FreeBSD__
+    return "FreeBSD";
+    #elif __unix || __unix__
+    return "Unix";
+    #else
+    return "Unknown";
+    #endif
+}
+
 #define typecheck(arg, t) \
 	if (args[arg].tag != (t)) \
-		error(ctx, ERR_TYPECHECK(args[arg].tag, (t)))
-
-value_t call_function(
-	lur_t* ctx, const fref_t* fref, value_t* args, size_t argc)
-{
-	assert(ctx && fref);
-	if (args) {
-		for (size_t i = 0; i < argc; i++)
-			*ctx->vm.sp++ = args[i];
-	}
-	
-	if (fref->func->syscall)
-		vm_call(&ctx->vm, make_fref(fref), argc, false);
-	else vm_launch(&ctx->vm, make_fref(fref), argc, true);
-	return ctx->vm.sp[-1];
-}
+		error(ctx, ERR_TYPECHECK_ARG( \
+			args[arg].tag, (t), arg))
 
 static value_t std_load(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -4077,7 +4266,7 @@ static value_t std_load(value_t* args, lur_t* ctx) {
 		make_fref(fref_new(ctx->cl.func, ctx)), 0, true);
 		
 	cl_free(&ctx->cl);
-	return make_null();
+	return make_none();
 }
 
 static value_t std_eval(value_t* args, lur_t* ctx) {
@@ -4086,24 +4275,16 @@ static value_t std_eval(value_t* args, lur_t* ctx) {
 	cl_compile(&ctx->cl,
 		get_text(args[0]),
 		get_text(args[0]));
-	
 	value_t result = vm_launch(&ctx->vm,
 		make_fref(fref_new(ctx->cl.func, ctx)), 0, true);
-		
 	cl_free(&ctx->cl);
 	return result;
-}
-
-static value_t std_system(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_TEXT);
-	system((const char*)get_text(args[0])->buffer);
-	return make_null();
 }
 
 static value_t std_error(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	error(ctx, (const char*)get_text(args[0])->buffer);
-	return make_null();
+	return make_none();
 }
 
 static value_t std_type_of(value_t* args, lur_t* ctx) {
@@ -4111,21 +4292,21 @@ static value_t std_type_of(value_t* args, lur_t* ctx) {
 		text_lit(type_name(args[0].tag), ctx));
 }
 
-static value_t std_to_num(value_t* args, lur_t* ctx) {
+static value_t std_to_number(value_t* args, lur_t* ctx) {
 	switch (args[0].tag) {
-	case TYPE_NULL: return make_number(0);
+	case TYPE_NONE: return make_number(0);
 	case TYPE_BOOL: return make_number(
 		get_bool(args[0]));
 	case TYPE_NUMBER: return args[0];
 	case TYPE_TEXT: return make_number(strtof(
 			(const char*)get_text(args[0])->buffer, NULL));
-	case TYPE_LIST: {
-		list_t* list = get_list(args[0]);
-		text_t* text = list_join(list, ctx);
-		return std_to_num(&make_text(text), ctx);
+	case TYPE_ARRAY: {
+		array_t* array = get_array(args[0]);
+		text_t* text = array_join(array, ctx);
+		return std_to_number(&make_text(text), ctx);
 	}
 	}
-	return make_null();
+	return make_number(0);
 }
 
 static value_t std_to_text(value_t* args, lur_t* ctx) {
@@ -4140,10 +4321,10 @@ static value_t std_repeat(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < n; i++) {
 		value_t args[] = { make_number(i) };
-		call_function(ctx, fref, args, 1);
+		lur_call_function(ctx, fref, args, 1);
 	}
 	
-	return make_null();
+	return make_none();
 }
 
 static value_t std_while(value_t* args, lur_t* ctx) {
@@ -4152,7 +4333,7 @@ static value_t std_while(value_t* args, lur_t* ctx) {
 	
 	while (true) {
 		value_t args[] = {};
-		value_t result = call_function(ctx, fref, args, 0);
+		value_t result = lur_call_function(ctx, fref, args, 0);
 		if (result.tag != TYPE_BOOL)
 			error(ctx, ERR_TYPECHECK(
 				result.tag, TYPE_BOOL));
@@ -4161,12 +4342,12 @@ static value_t std_while(value_t* args, lur_t* ctx) {
 			break;
 	}
 	
-	return make_null();
+	return make_none();
 }
 
 static value_t std_call(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_FREF);
-	return call_function(ctx, get_fref(args[0]), NULL, 0);
+	return lur_call_function(ctx, get_fref(args[0]), NULL, 0);
 }
 
 static value_t std_range(value_t* args, lur_t* ctx) {
@@ -4174,14 +4355,14 @@ static value_t std_range(value_t* args, lur_t* ctx) {
 	typecheck(1, TYPE_NUMBER);
 	int64_t start = (int64_t)get_number(args[0]);
 	int64_t end = (int64_t)get_number(args[1]);
-	list_t* list = list_new(ctx);
+	array_t* array = array_new(ctx);
 	if (start < end)
 		for (int64_t i = start; i < end; i++)
-			list_push(list, make_number(i), ctx);
+			array_push(array, make_number(i), ctx);
 	else
 		for (int64_t i = start; i > end; i--)
-			list_push(list, make_number(i), ctx);
-	return make_list(list);
+			array_push(array, make_number(i), ctx);
+	return make_array(array);
 }
 
 static value_t std_range_inc(value_t* args, lur_t* ctx) {
@@ -4189,22 +4370,39 @@ static value_t std_range_inc(value_t* args, lur_t* ctx) {
 	typecheck(1, TYPE_NUMBER);
 	int64_t start = (int64_t)get_number(args[0]);
 	int64_t end = (int64_t)get_number(args[1]);
-	list_t* list = list_new(ctx);
+	array_t* array = array_new(ctx);
 	if (start < end)
 		for (int64_t i = start; i <= end; i++)
-			list_push(list, make_number(i), ctx);
+			array_push(array, make_number(i), ctx);
 	else
 		for (int64_t i = start; i >= end; i--)
-			list_push(list, make_number(i), ctx);
-	return make_list(list);
+			array_push(array, make_number(i), ctx);
+	return make_array(array);
+}
+
+static value_t std_default_sort(value_t* args, lur_t* ctx) {
+	value_t a = args[0];
+	value_t b = args[1];
+	if (a.tag == TYPE_NUMBER) {
+		if (b.tag != TYPE_NUMBER) \
+			error(ctx, ERR_TYPECHECK(
+				b.tag, TYPE_NUMBER));
+		return get_bool(value_math(a, b, OP_LT, ctx)) ? a : b;
+		
+	} else if (a.tag == TYPE_TEXT) {
+		if (b.tag != TYPE_TEXT) \
+			error(ctx, ERR_TYPECHECK(b.tag, TYPE_TEXT));
+		return make_text(text_cmp(get_text(a), get_text(b)));
+	}
+	return a;
 }
 
 static value_t std_enum(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	list_t* list = get_list(args[0]);
+	typecheck(0, TYPE_ARRAY);
+	array_t* array = get_array(args[0]);
 	map_t* enum_ = map_new(ctx);
-	for (size_t i = 0; i < list->len; i++) {
-		text_t* name = value_to_text(list->items[i], ctx);
+	for (size_t i = 0; i < array->len; i++) {
+		text_t* name = value_to_text(array->items[i], ctx);
 		map_set(enum_,
 			make_text(name),
 			make_number(i),
@@ -4213,23 +4411,24 @@ static value_t std_enum(value_t* args, lur_t* ctx) {
 	return make_map(enum_);
 }
 
-static value_t std_exit(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_NUMBER);
-	exit(get_number(args[0]));
-}
-
-static value_t std_assert(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_BOOL);
-	if (!get_bool(args[0])) error(ctx, ERR_ASSERTION);
-	return make_null();
-}
-
 static value_t std_timestamp(value_t* args, lur_t* ctx) {
 	return make_number(time(NULL));
 }
 
-static value_t std_clock(value_t* args, lur_t* ctx) {
-	return make_number((double)clock() / CLOCKS_PER_SEC);
+static value_t std_sys_cmd(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	system((const char*)get_text(args[0])->buffer);
+	return make_none();
+}
+
+static value_t std_sys_exit(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	exit(get_number(args[0]));
+}
+
+static value_t std_sys_clock(value_t* args, lur_t* ctx) {
+	return make_number((double)clock() /
+		CLOCKS_PER_SEC);
 }
 
 static value_t std_math_eqf(value_t* args, lur_t* ctx) {
@@ -4243,7 +4442,7 @@ static value_t std_math_eqf(value_t* args, lur_t* ctx) {
 	else return make_bool(fabs(a - b) < eps);
 }
 
-static value_t std_math_shl(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_shl(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -4251,7 +4450,7 @@ static value_t std_math_shl(value_t* args, lur_t* ctx) {
 	return make_number(a << b);
 }
 
-static value_t std_math_shr(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_shr(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -4259,7 +4458,7 @@ static value_t std_math_shr(value_t* args, lur_t* ctx) {
 	return make_number(a >> b);
 }
 
-static value_t std_math_band(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_and(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -4267,7 +4466,7 @@ static value_t std_math_band(value_t* args, lur_t* ctx) {
 	return make_number(a & b);
 }
 
-static value_t std_math_bor(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_or(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -4275,7 +4474,7 @@ static value_t std_math_bor(value_t* args, lur_t* ctx) {
 	return make_number(a | b);
 }
 
-static value_t std_math_xor(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_xor(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -4283,7 +4482,7 @@ static value_t std_math_xor(value_t* args, lur_t* ctx) {
 	return make_number(a ^ b);
 }
 
-static value_t std_math_bnot(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_not(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(
 		~((int64_t)get_number(args[0])));
@@ -4446,16 +4645,27 @@ static value_t std_math_atanh(value_t* args, lur_t* ctx) {
 	return make_number(atanh(get_number(args[0])));
 }
 
-static value_t std_math_even(value_t* args, lur_t* ctx)  {
+static value_t std_math_is_even(value_t* args, lur_t* ctx)  {
 	typecheck(0, TYPE_NUMBER);
 	return make_bool(fmod(
 		get_number(args[0]), 2.0) == 0.0);
 }
 
-static value_t std_math_odd(value_t* args, lur_t* ctx) {
+static value_t std_math_is_odd(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_bool(fmod(
 		get_number(args[0]), 2.0) != 0.0);
+}
+
+static value_t std_math_is_prime(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	uint64_t number = (uint64_t)get_number(args[0]);
+	if (number <= 1) return make_bool(false);
+	for (size_t i = 2; i * i <= number; i++) {
+		if (number % i == 0)
+			return make_bool(false);
+	}
+	return make_bool(true);
 }
 
 static value_t std_math_hex(value_t* args, lur_t* ctx) {
@@ -4486,22 +4696,9 @@ static value_t std_math_hash(value_t* args, lur_t* ctx) {
 	return make_number(value_hash(args[0], ctx));
 }
 
-static value_t std_math_rand(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_NUMBER);
-	typecheck(1, TYPE_NUMBER);
-	return make_number(math_rand(get_number(args[0]),
-		get_number(args[1])));
-}
-
-static value_t std_math_srand(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_NUMBER);
-	srand(get_number(args[0]));
-	return make_null();
-}
-
-static value_t std_math_size(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* vec = get_list(args[0]);
+static value_t std_vec_size(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* vec = get_array(args[0]);
 	
 	double size = 0.0;
 	for (size_t i = 0; i < vec->len; i++) {
@@ -4516,10 +4713,10 @@ static value_t std_math_size(value_t* args, lur_t* ctx) {
 	return make_number(sqrt(size));
 }
 
-static value_t std_math_norm(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* vec = get_list(args[0]);
-	list_t* out = list_copy(vec, ctx);
+static value_t std_vec_norm(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* vec = get_array(args[0]);
+	array_t* out = array_copy(vec, ctx);
 	
 	double size = 0.0;
 	for (size_t i = 0; i < vec->len; i++) {
@@ -4540,14 +4737,14 @@ static value_t std_math_norm(value_t* args, lur_t* ctx) {
 		}
 	}
 	
-	return make_list(out);
+	return make_array(out);
 }
 
-static value_t std_math_dot(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	typecheck(1, TYPE_LIST);
-	const list_t* a = get_list(args[0]);
-	const list_t* b = get_list(args[1]);
+static value_t std_vec_dot(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_ARRAY);
+	const array_t* a = get_array(args[0]);
+	const array_t* b = get_array(args[1]);
 	
 	double dot = 0.0;
 	size_t shortest = (a->len < b->len) ? a->len : b->len;
@@ -4567,12 +4764,12 @@ static value_t std_math_dot(value_t* args, lur_t* ctx) {
 	return make_number(dot);
 }
 
-static value_t std_math_cross(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	typecheck(1, TYPE_LIST);
-	const list_t* a = get_list(args[0]);
-	const list_t* b = get_list(args[1]);
-	list_t* out = list_new(ctx);
+static value_t std_vec_cross(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_ARRAY);
+	const array_t* a = get_array(args[0]);
+	const array_t* b = get_array(args[1]);
+	array_t* out = array_new(ctx);
 	
 	size_t shortest = (a->len < b->len) ? a->len : b->len;
 	for (size_t i = 0; i < shortest; i++) {
@@ -4600,10 +4797,44 @@ static value_t std_math_cross(value_t* args, lur_t* ctx) {
 			get_number(a->items[k]) *
 			get_number(b->items[j]);
 		
-		list_push(out, make_number(result), ctx);
+		array_push(out, make_number(result), ctx);
 	}
 	
-	return make_list(out);
+	return make_array(out);
+}
+
+static value_t std_rand_seed(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	srand(get_number(args[0]));
+	return make_none();
+}
+
+static value_t std_rand_number(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_NUMBER);
+	return make_number(math_rand(
+		get_number(args[0]),
+		get_number(args[1])));
+}
+
+static value_t std_rand_text(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_TEXT);
+	size_t length = (size_t)get_number(args[0]);
+	const text_t* charset = get_text(args[1]);
+	text_t* text = text_new(NULL, 0, ctx);
+	for (size_t i = 0; i < length; i++)
+		text_push(text,
+			charset->buffer[
+				(size_t)math_rand(0, charset->len)],
+			ctx);
+	return make_text(text);
+}
+
+static value_t std_rand_item(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	array_t* array = get_array(args[0]);
+	return array->items[(size_t)math_rand(0, array->len)];
 }
 
 static value_t std_text_len(value_t* args, lur_t* ctx) {
@@ -4622,20 +4853,20 @@ static value_t std_text_cmp(value_t* args, lur_t* ctx) {
 static value_t std_text_chars(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
-	list_t* chars = list_new(ctx);
+	array_t* chars = array_new(ctx);
 	for (size_t i = 0; i < text->len; i++)
-		list_push(chars, make_text(text_new(
+		array_push(chars, make_text(text_new(
 			text->buffer + i, 1, ctx)), ctx);
-	return make_list(chars);
+	return make_array(chars);
 }
 
 static value_t std_text_ascii(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
-	list_t* ascii = list_new(ctx);
+	array_t* ascii = array_new(ctx);
 	for (size_t i = 0; i < text->len; i++)
-		list_push(ascii, make_number(text->buffer[i]), ctx);
-	return make_list(ascii);
+		array_push(ascii, make_number(text->buffer[i]), ctx);
+	return make_array(ascii);
 }
 
 static value_t std_text_slice(value_t* args, lur_t* ctx) {
@@ -4670,7 +4901,7 @@ static value_t std_text_split(value_t* args, lur_t* ctx) {
 	const text_t* input = get_text(args[0]);
 	const text_t* sep = get_text(args[1]);
 	
-	list_t* parts = list_new(ctx);
+	array_t* parts = array_new(ctx);
 	text_t* buffer = text_new(NULL, 0, ctx);
 	
 	for (size_t i = 0; i < input->len; i++) {
@@ -4683,7 +4914,7 @@ static value_t std_text_split(value_t* args, lur_t* ctx) {
 			if (i == input->len - 1)
 				text_push(buffer, input->buffer[i], ctx);
 			
-			list_push(parts,
+			array_push(parts,
 				make_text(text_copy(buffer, ctx)), ctx);
 			buffer = text_new(NULL, 0, ctx);
 			continue;
@@ -4692,7 +4923,7 @@ static value_t std_text_split(value_t* args, lur_t* ctx) {
 		text_push(buffer, input->buffer[i], ctx);
 	}
 	
-	return make_list(parts);
+	return make_array(parts);
 }
 
 static value_t std_text_to_upper(
@@ -4864,48 +5095,23 @@ static value_t std_text_find(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	typecheck(2, TYPE_NUMBER);
-	const text_t* text = get_text(args[0]);
-	const text_t* find = get_text(args[1]);
-	size_t start = (size_t)get_number(args[2]);
-	
-	for (size_t i = start; i < text->len; i++) {
-		bool match = i <= text->len - find->len &&
-			strncmp((const char*)find->buffer,
-				(const char*)text->buffer + i,
-				find->len) == 0;
-				
-		if (match)
-			return make_number(i);
-	}
-	
-	return make_null();
+	int64_t pos = text_find(
+		get_text(args[0]),
+		get_text(args[1]),
+		get_number(args[2]));
+	return (pos == -1) ? make_none() : make_number(pos);
 }
 
-static value_t std_text_rep_all(value_t* args, lur_t* ctx) {
+static value_t std_text_replace_all(value_t* args, lur_t* ctx)
+{
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	typecheck(2, TYPE_TEXT);
-	const text_t* input = get_text(args[0]);
+	const text_t* text = get_text(args[0]);
 	const text_t* find = get_text(args[1]);
 	const text_t* rep = get_text(args[2]);
-	text_t* output = text_new(NULL, 0, ctx);
-	
-	for (size_t i = 0; i < input->len; i++) {
-		bool match = i <= input->len - find->len &&
-			strncmp((const char*)find->buffer,
-				(const char*)input->buffer + i,
-				find->len) == 0;
-				
-		if (match) {
-			i += find->len - 1;
-			output = text_concat(output, rep, ctx);
-			continue;
-		}
-		
-		text_push(output, input->buffer[i], ctx);
-	}
-	
-	return make_text(output);
+	return make_text(text_replace_all(
+		text, find, rep, ctx));
 }
 
 static value_t std_text_edit_dist(
@@ -4917,310 +5123,306 @@ static value_t std_text_edit_dist(
 		get_text(args[0]), get_text(args[1])));
 }
 
-static value_t std_text_rand_text(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_NUMBER);
-	typecheck(1, TYPE_TEXT);
-	size_t length = (size_t)get_number(args[0]);
-	const text_t* charset = get_text(args[1]);
-	text_t* text = text_new(NULL, 0, ctx);
-	for (size_t i = 0; i < length; i++)
-		text_push(text,
-			charset->buffer[
-				(size_t)math_rand(0, charset->len)],
-			ctx);
-	return make_text(text);
+static value_t std_arr_len(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	return make_number(get_array(args[0])->len);
 }
 
-static value_t std_list_len(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	return make_number(get_list(args[0])->len);
+static value_t std_arr_get(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	array_t* array = get_array(args[0]);
+	size_t index = array_convert_index(
+		array, get_number(args[1]), ctx);
+	return array->items[(size_t)index];
 }
 
-static value_t std_list_get(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	list_t* list = get_list(args[0]);
-	size_t index = list_convert_index(
-		list, get_number(args[1]), ctx);
-	return list->items[(size_t)index];
+static value_t std_arr_set(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	array_t* array = get_array(args[0]);
+	size_t index = array_convert_index(
+		array, get_number(args[1]), ctx);
+	array->items[index] = args[2];
+	return make_none();
 }
 
-static value_t std_list_set(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	list_t* list = get_list(args[0]);
-	size_t index = list_convert_index(
-		list, get_number(args[1]), ctx);
-	list->items[index] = args[2];
-	return make_null();
-}
-
-static value_t std_list_insert(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_insert(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
-	list_t* list = get_list(args[0]);
+	array_t* array = get_array(args[0]);
 	double index = get_number(args[1]);
 	if (index < 0)
-		index = list->len + 1 + index;
-	if (index > list->len)
+		index = array->len + 1 + index;
+	if (index > array->len)
 		error(ctx, ERR_INDEX(args[1]));
-	list_insert(list, (size_t)index, args[2], ctx);
-	return make_null();
+	array_insert(array, (size_t)index, args[2], ctx);
+	return make_none();
 }
 
-static value_t std_list_del(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_del(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
-	list_t* list = get_list(args[0]);
-	size_t index = list_convert_index(
-		list, get_number(args[1]), ctx);
-	list_del(list, index, ctx);
-	return make_null();
+	array_t* array = get_array(args[0]);
+	size_t index = array_convert_index(
+		array, get_number(args[1]), ctx);
+	array_del(array, index, ctx);
+	return make_none();
 }
 
-static value_t std_list_pop(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	return list_pop(get_list(args[0]), ctx);
+static value_t std_arr_pop(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	return array_pop(get_array(args[0]), ctx);
 }
 
-static value_t std_list_head(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* list = get_list(args[0]);
-	if (list->len == 0)
+static value_t std_arr_head(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* array = get_array(args[0]);
+	if (array->len == 0)
 		error(ctx, ERR_INDEX(make_number(0)));
-	return list->items[0];
+	return array->items[0];
 }
 
-static value_t std_list_tail(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* list = get_list(args[0]);
-	if (list->len == 0)
+static value_t std_arr_tail(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* array = get_array(args[0]);
+	if (array->len == 0)
 		error(ctx, ERR_INDEX(make_number(0)));
-	list_t* tail = list_copy(list, ctx);
-	list_del(tail, 0, ctx);
-	return make_list(tail);
+	array_t* tail = array_copy(array, ctx);
+	array_del(tail, 0, ctx);
+	return make_array(tail);
 }
 
-static value_t std_list_last(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* list = get_list(args[0]);
-	if (list->len == 0)
+static value_t std_arr_last(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* array = get_array(args[0]);
+	if (array->len == 0)
 		error(ctx, ERR_INDEX(make_number(0)));
-	return list->items[list->len - 1];
+	return array->items[array->len - 1];
 }
 
-static value_t std_list_fill(value_t* args, lur_t* ctx) {
+static value_t std_arr_fill(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_FREF);
 	size_t n = get_number(args[0]);
 	const fref_t* fref = get_fref(args[1]);
-	list_t* list = list_new(ctx);
+	array_t* array = array_new(ctx);
 	for (size_t i = 0; i < n; i++) {
 		value_t args[] = { make_number(i) };
-		value_t item = call_function(ctx, fref, args, 1);
-		list_push(list, item, ctx);
+		value_t item = lur_call_function(ctx, fref, args, 1);
+		array_push(array, item, ctx);
 	}
-	return make_list(list);
+	return make_array(array);
 }
 
-static value_t std_list_repeat(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_repeat(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
-	const list_t* list = get_list(args[0]);
+	const array_t* array = get_array(args[0]);
 	size_t n = (size_t)get_number(args[1]);
-	return make_list(list_repeat(list, n, ctx));
+	return make_array(array_repeat(array, n, ctx));
 }
 
-static value_t std_list_count(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* list = get_list(args[0]);
+static value_t std_arr_rotate(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_NUMBER);
+	const array_t* array = get_array(args[0]);
+	int64_t n = (int64_t)get_number(args[1]);
+	
+	if (n < 0)
+		return make_array(array_rotate_left(array, -n, ctx));
+	return make_array(array_rotate_right(array, n, ctx));
+}
+
+static value_t std_arr_count(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* array = get_array(args[0]);
 	size_t count = 0;
-	for (size_t i = 0; i < list->len; i++)
-		if (value_eq(list->items[i], args[1]))
+	for (size_t i = 0; i < array->len; i++)
+		if (value_eq(array->items[i], args[1]))
 			count++;
 	return make_number(count);
 }
 
-static value_t std_list_contains(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	return make_bool(list_contains(
-		get_list(args[0]), args[1]));
+static value_t std_arr_contains(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	return make_bool(array_contains(
+		get_array(args[0]), args[1]));
 }
 
-static value_t std_list_find(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_find(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(2, TYPE_NUMBER);
-	list_t* list = get_list(args[0]);
+	array_t* array = get_array(args[0]);
 	value_t value = args[1];
 	size_t start = (size_t)get_number(args[2]);
 		
-	if (start >= list->len) return make_null();
-	for (size_t i = start; i < list->len; i++) {
-		if (value_eq(list->items[i], value))
+	if (start >= array->len) return make_none();
+	for (size_t i = start; i < array->len; i++) {
+		if (value_eq(array->items[i], value))
 			return make_number(i);
 	}
 		
-	return make_null();
+	return make_none();
 }
 
-static value_t std_list_iter(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_iter(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
-	const list_t* list = get_list(args[0]);
+	const array_t* array = get_array(args[0]);
 	const fref_t* fref = get_fref(args[1]);
 	
-	for (size_t i = 0; i < list->len; i++) {
-		value_t args[] = { list->items[i] };
-		call_function(ctx, fref, args, 1);
+	for (size_t i = 0; i < array->len; i++) {
+		value_t args[] = { array->items[i] };
+		lur_call_function(ctx, fref, args, 1);
 	}
 	
-	return make_null();
+	return make_none();
 }
 
-static value_t std_list_iteri(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_iteri(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
-	const list_t* list = get_list(args[0]);
+	const array_t* array = get_array(args[0]);
 	const fref_t* fref = get_fref(args[1]);
 	
-	for (size_t i = 0; i < list->len; i++) {
-		value_t args[] = { make_number(i), list->items[i] };
-		call_function(ctx, fref, args, 2);
+	for (size_t i = 0; i < array->len; i++) {
+		value_t args[] = { make_number(i), array->items[i] };
+		lur_call_function(ctx, fref, args, 2);
 	}
 	
-	return make_null();
+	return make_none();
 }
 
-static value_t std_list_map(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_map(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
-	const list_t* list = get_list(args[0]);
+	const array_t* array = get_array(args[0]);
 	const fref_t* fref = get_fref(args[1]);
-	list_t* mapped = list_new(ctx);
+	array_t* mapped = array_new(ctx);
 	
-	for (size_t i = 0; i < list->len; i++) {
-		value_t args[] = { list->items[i] };
-		value_t result = call_function(ctx, fref, args, 1);
-		list_push(mapped, result, ctx);
+	for (size_t i = 0; i < array->len; i++) {
+		value_t args[] = { array->items[i] };
+		value_t result = lur_call_function(ctx, fref, args, 1);
+		array_push(mapped, result, ctx);
 	}
 	
-	return make_list(mapped);
+	return make_array(mapped);
 }
 
-static value_t std_list_filter(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_filter(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
-	const list_t* list = get_list(args[0]);
+	const array_t* array = get_array(args[0]);
 	const fref_t* fref = get_fref(args[1]);
-	list_t* filtered = list_new(ctx);
+	array_t* filtered = array_new(ctx);
 	
-	for (size_t i = 0; i < list->len; i++) {
-		value_t args[] = { list->items[i] };
-		value_t result = call_function(ctx, fref, args, 1);
+	for (size_t i = 0; i < array->len; i++) {
+		value_t args[] = { array->items[i] };
+		value_t result = lur_call_function(ctx, fref, args, 1);
 		if (result.tag == TYPE_BOOL && get_bool(result))
-			list_push(filtered, list->items[i], ctx);
+			array_push(filtered, array->items[i], ctx);
 	}
 	
-	return make_list(filtered);
+	return make_array(filtered);
 }
 
-static value_t std_list_fold(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_fold(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(2, TYPE_FREF);
-	const list_t* list = get_list(args[0]);
+	const array_t* array = get_array(args[0]);
 	value_t result = args[1];
 	const fref_t* fref = get_fref(args[2]);
 	
-	for (size_t i = 0; i < list->len; i++) {
-		value_t args[] = { result, list->items[i] };
-		result = call_function(ctx, fref, args, 2);
+	for (size_t i = 0; i < array->len; i++) {
+		value_t args[] = { result, array->items[i] };
+		result = lur_call_function(ctx, fref, args, 2);
 	}
 	
 	return result;
 }
 
-static value_t std_list_flat(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	return make_list(list_flatten(get_list(args[0]), ctx));
+static value_t std_arr_flat(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	return make_array(array_flat(
+		get_array(args[0]), ctx));
 }
 
-static value_t std_list_dedup(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	list_t* list = get_list(args[0]);
-	list_t* result = list_new(ctx);
-	for (size_t i = 0; i < list->len; i++)
-		if (!list_contains(result, list->items[i]))
-			list_push(result, list->items[i], ctx);
-	return make_list(result);
+static value_t std_arr_dedup(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	array_t* array = get_array(args[0]);
+	array_t* result = array_new(ctx);
+	for (size_t i = 0; i < array->len; i++)
+		if (!array_contains(result, array->items[i]))
+			array_push(result, array->items[i], ctx);
+	return make_array(result);
 }
 
-static value_t std_list_sum(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* list = get_list(args[0]);
+static value_t std_arr_sum(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* array = get_array(args[0]);
 	
 	double result = 0.0;
-	for (size_t i = 0; i < list->len; i++) {
-		if (list->items[i].tag != TYPE_NUMBER)
-			error(ctx, ERR_TYPECHECK(list->items[i].tag,
+	for (size_t i = 0; i < array->len; i++) {
+		if (array->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(array->items[i].tag,
 				TYPE_NUMBER));
-		result += get_number(list->items[i]);
+		result += get_number(array->items[i]);
 	}
 	
 	return make_number(result);
 }
 
-static value_t std_list_average(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* list = get_list(args[0]);
+static value_t std_arr_average(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* array = get_array(args[0]);
 	
 	double result = 0.0;
-	for (size_t i = 0; i < list->len; i++) {
-		if (list->items[i].tag != TYPE_NUMBER)
-			error(ctx, ERR_TYPECHECK(list->items[i].tag,
+	for (size_t i = 0; i < array->len; i++) {
+		if (array->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(array->items[i].tag,
 				TYPE_NUMBER));
-		result += get_number(list->items[i]);
+		result += get_number(array->items[i]);
 	}
-	result /= list->len;
+	result /= array->len;
 	
 	return make_number(result);
 }
 
-static value_t std_list_mean(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* list = get_list(args[0]);
+static value_t std_arr_mean(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* array = get_array(args[0]);
 	
 	double result = 0.0;
-	if (list->len % 2 == 1) {
-		size_t i = list->len / 2;
-		if (list->items[i].tag != TYPE_NUMBER)
-			error(ctx, ERR_TYPECHECK(list->items[i].tag,
+	if (array->len % 2 == 1) {
+		size_t i = array->len / 2;
+		if (array->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(array->items[i].tag,
 				TYPE_NUMBER));
-		result = get_number(list->items[i]);
+		result = get_number(array->items[i]);
 	} else {
-		size_t a = list->len / 2;
-		size_t b = list->len / 2 - 1;
-		if (list->items[a].tag != TYPE_NUMBER)
-			error(ctx, ERR_TYPECHECK(list->items[a].tag,
+		size_t a = array->len / 2;
+		size_t b = array->len / 2 - 1;
+		if (array->items[a].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(array->items[a].tag,
 				TYPE_NUMBER));
-		if (list->items[b].tag != TYPE_NUMBER)
-			error(ctx, ERR_TYPECHECK(list->items[b].tag,
+		if (array->items[b].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(array->items[b].tag,
 				TYPE_NUMBER));
-		result = (get_number(list->items[a]) +
-			get_number(list->items[b])) / 2;
+		result = (get_number(array->items[a]) +
+			get_number(array->items[b])) / 2;
 	}
 	
 	return make_number(result);
 }
 
-static value_t std_list_any(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_any(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
-	const list_t* list = get_list(args[0]);
+	const array_t* array = get_array(args[0]);
 	const fref_t* fref = get_fref(args[1]);
 	
-	for (size_t i = 0; i < list->len; i++) {
-		value_t args[] = { list->items[i] };
-		value_t result = call_function(ctx, fref, args, 1);
+	for (size_t i = 0; i < array->len; i++) {
+		value_t args[] = { array->items[i] };
+		value_t result = lur_call_function(ctx, fref, args, 1);
 		if (result.tag == TYPE_BOOL && get_bool(result))
 			return make_bool(true);
 	}
@@ -5228,15 +5430,15 @@ static value_t std_list_any(value_t* args, lur_t* ctx) {
 	return make_bool(false);
 }
 
-static value_t std_list_all(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_all(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
-	const list_t* list = get_list(args[0]);
+	const array_t* array = get_array(args[0]);
 	const fref_t* fref = get_fref(args[1]);
 	
-	for (size_t i = 0; i < list->len; i++) {
-		value_t args[] = { list->items[i] };
-		value_t result = call_function(ctx, fref, args, 1);
+	for (size_t i = 0; i < array->len; i++) {
+		value_t args[] = { array->items[i] };
+		value_t result = lur_call_function(ctx, fref, args, 1);
 		if (result.tag == TYPE_BOOL && !get_bool(result))
 			return make_bool(false);
 	}
@@ -5244,85 +5446,92 @@ static value_t std_list_all(value_t* args, lur_t* ctx) {
 	return make_bool(true);
 }
 
-static value_t std_list_sort(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	return make_list(list_sort(get_list(args[0]), ctx));
+static value_t std_arr_sort(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	value_t value;
+	bool get = map_get(ctx->vm.globals,
+		make_text(text_lit("default_sort", ctx)), &value, ctx);
+	if (!get || value.tag != TYPE_FREF)
+		error(ctx,  ERR_NOT_IMPLEMENTED(
+			"function 'default_sort'"));
+	fref_t* sorter = get_fref(value);
+	return make_array(array_sort(
+		get_array(args[0]), sorter, ctx));
 }
 
-static value_t std_list_swap(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_sort_by(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_FREF);
+	return make_array(array_sort(
+		get_array(args[0]), get_fref(args[1]), ctx));
+}
+
+static value_t std_arr_swap(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
-	const list_t* input = get_list(args[0]);
-	list_t* output = list_copy(input, ctx);
+	const array_t* input = get_array(args[0]);
+	array_t* output = array_copy(input, ctx);
 	
-	size_t a = list_convert_index(
+	size_t a = array_convert_index(
 		input, get_number(args[1]), ctx);
 	
-	size_t b = list_convert_index(
+	size_t b = array_convert_index(
 		input, get_number(args[2]), ctx);
 	
-	list_swap(output, a, b);
-	return make_list(output);
+	array_swap(output, a, b);
+	return make_array(output);
 }
 
-static value_t std_list_join(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	return make_text(list_join(get_list(args[0]), ctx));
+static value_t std_arr_join(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	return make_text(array_join(get_array(args[0]), ctx));
 }
 
-static value_t std_list_zip(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
-	const list_t* lists = get_list(args[0]);
-	list_t* zip = list_new(ctx);
+static value_t std_arr_zip(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* arrays = get_array(args[0]);
+	array_t* zip = array_new(ctx);
 	
 	size_t biggest = 0;
-	for (size_t i = 0; i < lists->len; i++) {
-		if (lists->items[i].tag != TYPE_LIST)
+	for (size_t i = 0; i < arrays->len; i++) {
+		if (arrays->items[i].tag != TYPE_ARRAY)
 			error(ctx, ERR_TYPECHECK(
-				lists->items[i].tag, TYPE_LIST));
+				arrays->items[i].tag, TYPE_ARRAY));
 		
-		const list_t* list = get_list(lists->items[i]);
-		biggest = (list->len > biggest) ? list->len : biggest;
+		const array_t* array = get_array(arrays->items[i]);
+		biggest = (array->len > biggest) ? array->len : biggest;
 	}
 	
 	for (size_t i = 0; i < biggest; i++) {
-		for (size_t j = 0; j < lists->len; j++) {
-			const list_t* list = get_list(lists->items[j]);
-			if (i < list->len)
-				list_push(zip, list->items[i], ctx);
+		for (size_t j = 0; j < arrays->len; j++) {
+			const array_t* array = get_array(arrays->items[j]);
+			if (i < array->len)
+				array_push(zip, array->items[i], ctx);
 		}
 	}
 	
-	return make_list(zip);
+	return make_array(zip);
 }
 
-static value_t std_list_chunk(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_LIST);
+static value_t std_arr_chunk(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
-	list_t* original = get_list(args[0]);
+	array_t* original = get_array(args[0]);
 	size_t n = (size_t)get_number(args[1]);
-	list_t* chunks = list_new(ctx);
+	array_t* chunks = array_new(ctx);
 	
 	for (size_t i = 0; i < original->len; i += n) {
-		list_t* chunk = list_new(ctx);
+		array_t* chunk = array_new(ctx);
 		for (size_t j = 0; j < n; j++) {
-			list_push(chunk, original->items[i + j], ctx);
+			array_push(chunk, original->items[i + j], ctx);
 			if (i + j == original->len - 1)
 				break;
 		}
-		list_push(chunks, make_list(chunk), ctx);
+		array_push(chunks, make_array(chunk), ctx);
 	}
 	
-	return make_list(chunks);
-}
-
-static value_t std_list_rand_item(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_LIST);
-	list_t* list = get_list(args[0]);
-	return list->items[(size_t)math_rand(0, list->len)];
+	return make_array(chunks);
 }
 
 static value_t std_map_len(value_t* args, lur_t* ctx) {
@@ -5342,7 +5551,7 @@ static value_t std_map_get(value_t* args, lur_t* ctx) {
 static value_t std_map_set(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	map_set(get_map(args[0]), args[1], args[2], ctx);
-	return make_null();
+	return make_none();
 }
 
 static value_t std_map_has_key(value_t* args, lur_t* ctx)
@@ -5352,7 +5561,7 @@ static value_t std_map_has_key(value_t* args, lur_t* ctx)
 	
 	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* entry = &map->entries[i];
-		if (entry->key.tag == TYPE_NULL) continue;
+		if (entry->key.tag == TYPE_NONE) continue;
 		if (value_eq(entry->key, args[1]))
 			return make_bool(true);
 	}
@@ -5368,7 +5577,7 @@ static value_t std_map_has_value(
 	
 	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* entry = &map->entries[i];
-		if (entry->key.tag == TYPE_NULL) continue;
+		if (entry->key.tag == TYPE_NONE) continue;
 		if (value_eq(entry->value, args[1]))
 			return make_bool(true);
 	}
@@ -5379,29 +5588,29 @@ static value_t std_map_has_value(
 static value_t std_map_keys(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
-	list_t* keys = list_new(ctx);
+	array_t* keys = array_new(ctx);
 	
 	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* entry = &map->entries[i];
-		if (entry->key.tag == TYPE_NULL) continue;
-		list_push(keys, entry->key, ctx);
+		if (entry->key.tag == TYPE_NONE) continue;
+		array_push(keys, entry->key, ctx);
 	}
 	
-	return make_list(keys);
+	return make_array(keys);
 }
 
 static value_t std_map_values(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
-	list_t* values = list_new(ctx);
+	array_t* values = array_new(ctx);
 	
 	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* entry = &map->entries[i];
-		if (entry->key.tag == TYPE_NULL) continue;
-		list_push(values, entry->value, ctx);
+		if (entry->key.tag == TYPE_NONE) continue;
+		array_push(values, entry->value, ctx);
 	}
 	
-	return make_list(values);
+	return make_array(values);
 }
 
 static value_t std_map_kv_pairs(
@@ -5409,33 +5618,37 @@ static value_t std_map_kv_pairs(
 {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
-	list_t* pairs = list_new(ctx);
+	array_t* pairs = array_new(ctx);
 	
 	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* entry = &map->entries[i];
-		if (entry->key.tag == TYPE_NULL) continue;
-		list_t* pair = list_new(ctx);
-		list_push(pair, entry->key, ctx);
-		list_push(pair, entry->value, ctx);
-		list_push(pairs, make_list(pair), ctx);
+		if (entry->key.tag == TYPE_NONE) continue;
+		if (entry->value.tag == TYPE_MAP &&
+			map == get_map(entry->value))
+			continue;
+		
+		array_t* pair = array_new(ctx);
+		array_push(pair, entry->key, ctx);
+		array_push(pair, entry->value, ctx);
+		array_push(pairs, make_array(pair), ctx);
 	}
 	
-	return make_list(pairs);
+	return make_array(pairs);
 }
 
 static value_t std_map_from_kv_pairs(
 	value_t* args, lur_t* ctx)
 {
-	typecheck(0, TYPE_LIST);
-	const list_t* pairs = get_list(args[0]);
+	typecheck(0, TYPE_ARRAY);
+	const array_t* pairs = get_array(args[0]);
 	map_t* map = map_new(ctx);
 	
 	for (size_t i = 0; i  < pairs->len; i++) {
-		if (pairs->items[i].tag != TYPE_LIST)
+		if (pairs->items[i].tag != TYPE_ARRAY)
 			error(ctx, ERR_TYPECHECK(
-				pairs->items[i].tag, TYPE_LIST));
+				pairs->items[i].tag, TYPE_ARRAY));
 		
-		const list_t* pair = get_list(pairs->items[i]);
+		const array_t* pair = get_array(pairs->items[i]);
 		if (pair->len != 2)
 			continue;
 			
@@ -5453,12 +5666,12 @@ static value_t std_map_iter(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* entry = &map->entries[i];
-		if (entry->key.tag == TYPE_NULL) continue;
+		if (entry->key.tag == TYPE_NONE) continue;
 		value_t args[] = { entry->key, entry->value };
-		call_function(ctx, fref, args, 2);
+		lur_call_function(ctx, fref, args, 2);
 	}
 	
-	return make_null();
+	return make_none();
 }
 
 static value_t std_map_get_or_default(
@@ -5475,13 +5688,13 @@ static value_t std_map_get_or_default(
 static value_t std_io_print(value_t* args, lur_t* ctx) {
 	value_print(args[0], ctx);
 	fflush(stdout);
-	return make_null();
+	return make_none();
 }
 
 static value_t std_io_print_ln(value_t* args, lur_t* ctx) {
 	value_print(args[0], ctx);
 	lur_printf("\n");
-	return make_null();
+	return make_none();
 }
 
 static value_t std_io_read_ln(value_t* args, lur_t* ctx) {
@@ -5497,14 +5710,14 @@ static value_t std_io_write(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	io_write(get_text(args[0]), get_text(args[1]), ctx);
-	return make_null();
+	return make_none();
 }
 
 static value_t std_io_append(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	io_append(get_text(args[0]), get_text(args[1]), ctx);
-	return make_null();
+	return make_none();
 }
 
 static value_t std_io_size(value_t* args, lur_t* ctx) {
@@ -5513,30 +5726,52 @@ static value_t std_io_size(value_t* args, lur_t* ctx) {
 		io_file_size(get_text(args[0]), ctx));
 }
 
+static value_t std_io_dir_exists(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	const text_t* path = get_text(args[0]);
+	struct stat st = {0};
+	return make_bool(
+		stat((const char*)path->buffer, &st) != -1);
+	return make_none();
+}
+
+static value_t std_io_make_dir(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	const text_t* path = get_text(args[0]);
+	mkdir((const char*)path->buffer, 0700);
+	return make_none();
+}
+
 static value_t std_io_list_dir(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* path = get_text(args[0]);
-	list_t* files = list_new(ctx);
+	array_t* files = array_new(ctx);
 	
 	DIR *dir;
-	struct dirent *ent;
+	struct dirent* entry;
 	if ((dir = opendir((const char*)path->buffer)) != NULL) {
-		while ((ent = readdir(dir)) != NULL) {
-		 	text_t* file = text_lit(ent->d_name, ctx);
-		 	list_push(files, make_text(file), ctx);
+		while ((entry = readdir(dir)) != NULL) {
+		 	text_t* file = text_lit(entry->d_name, ctx);
+		 	array_push(files, make_text(file), ctx);
 		}
 		closedir(dir);
-		return make_list(files);
+		return make_array(files);
 	}
 	
 	error(ctx, ERR_OPEN_FAILED(path));
-	return make_null();
+	return make_none();
 }
 
 static value_t std_io_del(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	remove((char*)get_text(args[0])->buffer);
-	return make_null();
+	return make_none();
+}
+
+static value_t std_debug_assert(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_BOOL);
+	if (!get_bool(args[0])) error(ctx, ERR_ASSERTION);
+	return make_none();
 }
 
 #undef typecheck
@@ -5546,10 +5781,10 @@ static void stdvar_add(
 {
 	#if LUR_DEBUG_PRINT_STDLIB
 	if (ctx->std_map_name)
-		printf("stdlib: %s.%s\n",
+		lur_dprintf("stdlib: %s.%s\n",
 			ctx->std_map_name, name);
 	else
-		printf("stdlib: %s\n", name);
+		lur_printf("stdlib: %s\n", name);
 	#endif
 	
 	if (!ctx->std_map) {
@@ -5600,39 +5835,49 @@ static void std_set_map(
 void stdlib_load(lur_t* ctx) {
 	gc_pause(ctx);
 	
-	stdvar_add(ctx, "__VERSION__",
-		make_text(text_lit(LUR_VERSION, ctx)));
-	stdvar_add(ctx, "__G__", make_map(ctx->vm.globals));
+	stdvar_add(ctx, "GLOBALS",
+		make_map(ctx->vm.globals));
 	stdfun_add(ctx, "load", 1, std_load);
 	stdfun_add(ctx, "eval", 1, std_eval);
-	stdfun_add(ctx, "system", 1, std_system);
 	stdfun_add(ctx, "error", 1, std_error);
 	stdfun_add(ctx, "type_of", 1, std_type_of);
-	stdfun_add(ctx, "to_num", 1, std_to_num);
+	stdfun_add(ctx, "to_number", 1, std_to_number);
 	stdfun_add(ctx, "to_text", 1, std_to_text);
 	stdfun_add(ctx, "repeat", 2, std_repeat);
 	stdfun_add(ctx, "while", 1, std_while);
 	stdfun_add(ctx, "call", 1, std_call);
 	stdfun_add(ctx, "range", 2, std_range);
 	stdfun_add(ctx, "range_inc", 2, std_range_inc);
+	stdfun_add(ctx, "default_sort", 2, std_default_sort);
 	stdfun_add(ctx, "enum", 1, std_enum);
-	stdfun_add(ctx, "exit", 1, std_exit);
-	stdfun_add(ctx, "assert", 1, std_assert);
 	stdfun_add(ctx, "timestamp", 0, std_timestamp);
-	stdfun_add(ctx, "clock", 0, std_clock);
 	
-	std_set_map(ctx, "Math");
+	std_set_map(ctx, "sys");
+	stdvar_add(ctx, "VERSION",
+		make_text(text_lit(LUR_VERSION, ctx)));
+	stdvar_add(ctx, "PLATFORM",
+		make_text(text_lit(get_platform(), ctx)));
+	stdvar_add(ctx, "COMPILER_VERSION",
+		make_text(text_lit(__VERSION__, ctx)));
+	stdvar_add(ctx, "BUILD_TIME",
+		make_text(text_lit(__TIMESTAMP__, ctx)));
+	stdfun_add(ctx, "cmd", 1, std_sys_cmd);
+	stdfun_add(ctx, "exit", 1, std_sys_exit);
+	stdfun_add(ctx, "clock", 0, std_sys_clock);
+	std_set_map(ctx, NULL);
+	
+	std_set_map(ctx, "math");
 	stdvar_add(ctx, "PI", make_number(M_PI));
 	stdvar_add(ctx, "E", make_number(M_E));
 	stdvar_add(ctx, "INF", make_number(INFINITY));
 	stdvar_add(ctx, "NAN", make_number(NAN));
 	stdfun_add(ctx, "eqf", 3, std_math_eqf);
-	stdfun_add(ctx, "shl", 2, std_math_shl);
-	stdfun_add(ctx, "shr", 2, std_math_shr);
-	stdfun_add(ctx, "band", 2, std_math_band);
-	stdfun_add(ctx, "bor", 2, std_math_bor);
-	stdfun_add(ctx, "xor", 2, std_math_xor);
-	stdfun_add(ctx, "bnot", 1, std_math_bnot);
+	stdfun_add(ctx, "bit_shl", 2, std_math_bit_shl);
+	stdfun_add(ctx, "bit_shr", 2, std_math_bit_shr);
+	stdfun_add(ctx, "bit_and", 2, std_math_bit_and);
+	stdfun_add(ctx, "bit_or", 2, std_math_bit_or);
+	stdfun_add(ctx, "bit_xor", 2, std_math_bit_xor);
+	stdfun_add(ctx, "bit_not", 1, std_math_bit_not);
 	stdfun_add(ctx, "log", 2, std_math_log);
 	stdfun_add(ctx, "sqrt", 1, std_math_sqrt);
 	stdfun_add(ctx, "squared", 1, std_math_squared);
@@ -5659,20 +5904,29 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "asinh", 1, std_math_asinh);
 	stdfun_add(ctx, "acosh", 1, std_math_acosh);
 	stdfun_add(ctx, "atanh", 1, std_math_atanh);
-	stdfun_add(ctx, "even", 1, std_math_even);
-	stdfun_add(ctx, "odd", 1, std_math_odd);
+	stdfun_add(ctx, "is_even", 1, std_math_is_even);
+	stdfun_add(ctx, "is_odd", 1, std_math_is_odd);
+	stdfun_add(ctx, "is_prime", 1, std_math_is_prime);
 	stdfun_add(ctx, "hex", 1, std_math_hex);
 	stdfun_add(ctx, "bin", 1, std_math_bin);
 	stdfun_add(ctx, "hash", 1, std_math_hash);
-	stdfun_add(ctx, "rand", 2, std_math_rand);
-	stdfun_add(ctx, "srand", 1, std_math_srand);
-	stdfun_add(ctx, "size", 1, std_math_size);
-	stdfun_add(ctx, "norm", 1, std_math_norm);
-	stdfun_add(ctx, "dot", 2, std_math_dot);
-	stdfun_add(ctx, "cross", 2, std_math_cross);
 	std_set_map(ctx, NULL);
 	
-	std_set_map(ctx, "Text");
+	std_set_map(ctx, "vec");
+	stdfun_add(ctx, "size", 1, std_vec_size);
+	stdfun_add(ctx, "norm", 1, std_vec_norm);
+	stdfun_add(ctx, "dot", 2, std_vec_dot);
+	stdfun_add(ctx, "cross", 2, std_vec_cross);
+	std_set_map(ctx, NULL);
+	
+	std_set_map(ctx, "rand");
+	stdfun_add(ctx, "seed", 1, std_rand_seed);
+	stdfun_add(ctx, "number", 2, std_rand_number);
+	stdfun_add(ctx, "text", 2, std_rand_text);
+	stdfun_add(ctx, "item", 1, std_rand_item);
+	std_set_map(ctx, NULL);
+	
+	std_set_map(ctx, "text");
 	stdvar_add(ctx, "LETTERS", make_text(
 		text_lit("abcdefghijklmnopqrstuvwxyz", ctx)));
 	stdvar_add(ctx, "DIGITS", make_text(
@@ -5681,6 +5935,8 @@ void stdlib_load(lur_t* ctx) {
 		text_lit("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", ctx)));
 	stdvar_add(ctx, "WHITESPACE", make_text(
 		text_lit(" \t\n\r", ctx)));
+	stdvar_add(ctx, "NEWLINE", make_text(
+		text_lit("\n", ctx)));
 	stdfun_add(ctx, "len", 1, std_text_len);
 	stdfun_add(ctx, "cmp", 2, std_text_cmp);
 	stdfun_add(ctx, "chars", 1, std_text_chars);
@@ -5700,47 +5956,47 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "right_pad", 3, std_text_right_pad);
 	stdfun_add(ctx, "pad", 3,  std_text_pad);
 	stdfun_add(ctx, "find", 3, std_text_find);
-	stdfun_add(ctx, "rep_all", 3, std_text_rep_all);
+	stdfun_add(ctx, "replace_all", 3, std_text_replace_all);
 	stdfun_add(ctx, "edit_dist", 2, std_text_edit_dist);
-	stdfun_add(ctx, "rand_text", 2,  std_text_rand_text);
 	std_set_map(ctx, NULL);
 	
-	std_set_map(ctx, "List");
-	stdfun_add(ctx, "len", 1, std_list_len);
-	stdfun_add(ctx, "get", 2, std_list_get);
-	stdfun_add(ctx, "set", 3, std_list_set);
-	stdfun_add(ctx, "insert", 3, std_list_insert);
-	stdfun_add(ctx, "del", 2, std_list_del);
-	stdfun_add(ctx, "pop", 1, std_list_pop);
-	stdfun_add(ctx, "head", 1, std_list_head);
-	stdfun_add(ctx, "tail", 1, std_list_tail);
-	stdfun_add(ctx, "last", 1, std_list_last);
-	stdfun_add(ctx, "fill", 2, std_list_fill);
-	stdfun_add(ctx, "repeat", 2, std_list_repeat);
-	stdfun_add(ctx, "count", 2, std_list_count);
-	stdfun_add(ctx, "contains", 2, std_list_contains);
-	stdfun_add(ctx, "find", 3, std_list_find);
-	stdfun_add(ctx, "iter", 2, std_list_iter);
-	stdfun_add(ctx, "iteri", 2, std_list_iteri);
-	stdfun_add(ctx, "map", 2, std_list_map);
-	stdfun_add(ctx, "filter", 2, std_list_filter);
-	stdfun_add(ctx, "fold", 3, std_list_fold);
-	stdfun_add(ctx, "flat", 1, std_list_flat);
-	stdfun_add(ctx, "dedup", 1, std_list_dedup);
-	stdfun_add(ctx, "sum", 1, std_list_sum);
-	stdfun_add(ctx, "average", 1, std_list_average);
-	stdfun_add(ctx, "mean", 1, std_list_mean);
-	stdfun_add(ctx, "any", 2, std_list_any);
-	stdfun_add(ctx, "all", 2, std_list_all);
-	stdfun_add(ctx, "sort", 1, std_list_sort);
-	stdfun_add(ctx, "swap", 3, std_list_swap);
-	stdfun_add(ctx, "join", 1, std_list_join);
-	stdfun_add(ctx, "zip", 1, std_list_zip);
-	stdfun_add(ctx, "chunk", 2, std_list_chunk);
-	stdfun_add(ctx, "rand_item", 1, std_list_rand_item);
+	std_set_map(ctx, "arr");
+	stdfun_add(ctx, "len", 1, std_arr_len);
+	stdfun_add(ctx, "get", 2, std_arr_get);
+	stdfun_add(ctx, "set", 3, std_arr_set);
+	stdfun_add(ctx, "insert", 3, std_arr_insert);
+	stdfun_add(ctx, "del", 2, std_arr_del);
+	stdfun_add(ctx, "pop", 1, std_arr_pop);
+	stdfun_add(ctx, "head", 1, std_arr_head);
+	stdfun_add(ctx, "tail", 1, std_arr_tail);
+	stdfun_add(ctx, "last", 1, std_arr_last);
+	stdfun_add(ctx, "fill", 2, std_arr_fill);
+	stdfun_add(ctx, "repeat", 2, std_arr_repeat);
+	stdfun_add(ctx, "rotate", 2, std_arr_rotate);
+	stdfun_add(ctx, "count", 2, std_arr_count);
+	stdfun_add(ctx, "contains", 2, std_arr_contains);
+	stdfun_add(ctx, "find", 3, std_arr_find);
+	stdfun_add(ctx, "iter", 2, std_arr_iter);
+	stdfun_add(ctx, "iteri", 2, std_arr_iteri);
+	stdfun_add(ctx, "map", 2, std_arr_map);
+	stdfun_add(ctx, "filter", 2, std_arr_filter);
+	stdfun_add(ctx, "fold", 3, std_arr_fold);
+	stdfun_add(ctx, "flat", 1, std_arr_flat);
+	stdfun_add(ctx, "dedup", 1, std_arr_dedup);
+	stdfun_add(ctx, "sum", 1, std_arr_sum);
+	stdfun_add(ctx, "average", 1, std_arr_average);
+	stdfun_add(ctx, "mean", 1, std_arr_mean);
+	stdfun_add(ctx, "any", 2, std_arr_any);
+	stdfun_add(ctx, "all", 2, std_arr_all);
+	stdfun_add(ctx, "sort", 1, std_arr_sort);
+	stdfun_add(ctx, "sort_by", 2, std_arr_sort_by);
+	stdfun_add(ctx, "swap", 3, std_arr_swap);
+	stdfun_add(ctx, "join", 1, std_arr_join);
+	stdfun_add(ctx, "zip", 1, std_arr_zip);
+	stdfun_add(ctx, "chunk", 2, std_arr_chunk);
 	std_set_map(ctx, NULL);
 	
-	std_set_map(ctx, "Map");
+	std_set_map(ctx, "map");
 	stdfun_add(ctx, "len", 1, std_map_len);
 	stdfun_add(ctx, "get", 2, std_map_get);
 	stdfun_add(ctx, "set", 3, std_map_set);
@@ -5756,7 +6012,7 @@ void stdlib_load(lur_t* ctx) {
 		std_map_get_or_default);
 	std_set_map(ctx, NULL);
 	
-	std_set_map(ctx, "IO");
+	std_set_map(ctx, "io");
 	stdfun_add(ctx, "print", 1, std_io_print);
 	stdfun_add(ctx, "print_ln", 1, std_io_print_ln);
 	stdfun_add(ctx, "read_ln", 0, std_io_read_ln);
@@ -5764,8 +6020,14 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "write", 2, std_io_write);
 	stdfun_add(ctx, "append", 2, std_io_append);
 	stdfun_add(ctx, "size", 1, std_io_size);
+	stdfun_add(ctx, "dir_exists", 1, std_io_dir_exists);
+	stdfun_add(ctx, "make_dir", 1, std_io_make_dir);
 	stdfun_add(ctx, "list_dir", 1, std_io_list_dir);
 	stdfun_add(ctx, "del", 1, std_io_del);
+	std_set_map(ctx, NULL);
+	
+	std_set_map(ctx, "debug");
+	stdfun_add(ctx, "assert", 1, std_debug_assert);
 	std_set_map(ctx, NULL);
 	
 	gc_resume(ctx);
@@ -5809,13 +6071,13 @@ void lur_free(lur_t* ctx) {
 	free(ctx->mem.marked);
 	
 	#if LUR_DEBUG_PRINT_MEM_STATS
-	lur_printf("memory leaked: %td bytes\n",
+	lur_dprintf("memory leaked: %td bytes\n",
 		ctx->mem.bytes - sizeof(lur_t));
-	lur_printf("total allocated: %zu bytes\n",
+	lur_dprintf("total allocated: %zu bytes\n",
 		ctx->mem.total);
-	lur_printf("gc objects cleaned: %zu\n",
+	lur_dprintf("gc objects cleaned: %zu\n",
 		ctx->mem.gc_cleaned);
-	lur_printf("gc cycles: %zu\n", ctx->mem.gc_cycles);
+	lur_dprintf("gc cycles: %zu\n", ctx->mem.gc_cycles);
 	#endif
 	
 	mem_free(ctx, ctx, sizeof(lur_t));
@@ -5839,7 +6101,7 @@ void lur_xstring(lur_t* ctx, const char* src) {
 	if (!ctx) return;
 	if (setjmp(ctx->errjmp)) return;
 	exec(ctx,
-		text_lit(src, ctx), text_lit("<main>", ctx));
+		text_lit(src, ctx), text_lit("<src>", ctx));
 }
 
 void lur_xfile(lur_t* ctx, const char* path) {
@@ -5851,7 +6113,7 @@ void lur_xfile(lur_t* ctx, const char* path) {
 }
 
 static void interpret(lur_t* ctx) {
-	puts(LUR_VERSION);
+	lur_printf("%s\n", LUR_VERSION);
 	ctx->interpreter = true;
 	for (;;) {
 		lur_printf(":: ");
