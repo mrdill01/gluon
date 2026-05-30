@@ -10,7 +10,12 @@
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <errno.h>
 
 #define LUR_VERSION "lur 1.0"
 #define LUR_VERSION_MAJ 1
@@ -21,7 +26,7 @@
 #define LUR_DEBUG_PRINT_CODE 0
 #define LUR_DEBUG_PRINT_DATA 0
 #define LUR_DEBUG_PRINT_STACK 0
-#define LUR_DEBUG_PRINT_STDLIB 1
+#define LUR_DEBUG_PRINT_STDLIB 0
 #define LUR_DEBUG_PRINT_TOKENS 0
 #define LUR_DEBUG_PRINT_ALLOCS 0
 #define LUR_DEBUG_PRINT_MEM_STATS 0
@@ -31,8 +36,14 @@
 #define lur_eprintf printf
 #define lur_dprintf printf
 
+#define lur_realloc realloc
+#define lur_gc_realloc realloc
+#define lur_gc_free free
+
 #define INIT_ARRAY_CAP 8
 #define MAP_MAX_LOAD 0.75
+#define FIRST_GC_LIMIT (1024 * 1024)
+#define GC_GROW_FACTOR 2
 
 #define MAX_CODE SIZE_MAX
 #define MAX_DATA UINT16_MAX
@@ -44,6 +55,7 @@
 #define MAX_VREFS UINT8_MAX
 #define MAX_ARRAY_LIT_ITEMS UINT16_MAX
 #define MAX_MAP_LIT_ITEMS UINT16_MAX
+#define MAX_THREADS 8192
 #define MAX_ERR_MSG 2048
 
 #define ERR_OUT_OF_MEMORY \
@@ -51,18 +63,44 @@
 #define ERR_LIMIT(name, limit) \
 	"%s limit reached (%d)", (name), (limit)
 #define ERR_READ_FAILED(path) \
-	"failed to read '%.*s'", (path)->len, (path)->buffer
+	"failed to read file '%.*s'", (path)->len, (path)->buffer
 #define ERR_WRITE_FAILED(path) \
-	"failed to write to '%.*s'", (path)->len, (path)->buffer
-#define ERR_OPEN_FAILED(path) \
-	"failed to open '%.*s'", (path)->len, (path)->buffer
+	"failed to write to file '%.*s'", (path)->len, (path)->buffer
+#define ERR_OPEN_FAILED(path, mode) \
+	"failed to open file '%.*s' in mode '%.*s'", \
+		(path)->len, (path)->buffer, \
+		(mode)->len, (mode)->buffer
+#define ERR_INVALID_HANDLE(handle) \
+	"invalid file handle '%d'", (handle)
+#define ERR_THREAD_SPAWN_FAILED(code) \
+	"thread.spawn failed (%d)", (code)
+#define ERR_MAX_THREADS(max) \
+	"maximum number of threads reached (%d)", (max)
+#define ERR_SOCKET_CREATE(msg) \
+	"creating socket failed: %s", (msg)
+#define ERR_SOCKET_CONNECT(addr, port, msg) \
+	"failed to connect to %.*s:%d: %s", \
+		(addr->len), (addr->buffer), (port), (msg)
+#define ERR_SOCKET_BIND(addr, port, msg) \
+	"failed to bind socket to %.*s:%d: %s", \
+		(addr->len), (addr->buffer), (port), (msg)
+#define ERR_SOCKET_LISTEN_FAILED(msg) \
+	"socket.listen failed: %s", (msg)
+#define ERR_SOCKET_ACCEPT_FAILED(msg) \
+	"socket.accept failed: %s", (msg)
+#define ERR_SOCKET_SEND_FAILED(msg) \
+	"socket.send failed: %s", (msg)
+#define ERR_SOCKET_RECV_FAILED(msg) \
+	"socket.recv failed: %s", (msg)
 #define ERR_UNKNOWN_CHAR(c) \
-	"unknown character '%c' (ASCII #%d)", (c), (c)
+	"unknown character '%c' (ASCII %d)", (c), (c)
 #define ERR_EXPECTED_EXPR(got) \
 	"expected expression, got '%.*s'", \
 		(got)->len, (got)->buffer
+#define ERR_UNTERMINATED_COMMENT \
+	"unterminated multi-line comment (expected '--]')"
 #define ERR_UNTERMINATED_TEXT \
-	"unterminated text"
+	"unterminated text (expected '\"')"
 #define ERR_INVALID_ESCAPE(ch) \
 	"invalid escape sequence: '\\%c'", (ch)
 #define ERR_TYPECHECK(got, wanted) \
@@ -95,8 +133,6 @@
 	"division by zero"
 #define ERR_REMAINDER_OF_DIV_BY_ZERO \
 	"remainder of division by zero"
-#define ERR_NOT_HASHABLE(t) \
-	"value of type %s is not hashable", type_name(t)
 #define ERR_ASSERTION \
 	"assertion failed"
 
@@ -153,6 +189,7 @@ typedef enum {
 	OP_IF,
 	OP_IFNOT,
 	OP_CALL,
+	OP_TAILCALL,
 	OP_RET,
 	OP_HALT,
 } opcode_t;
@@ -201,6 +238,7 @@ static opinfo_t OPINFO[] = {
 	[OP_IF] = {"if", 2},
 	[OP_IFNOT] = {"ifnot", 2},
 	[OP_CALL] = {"call", 1},
+	[OP_TAILCALL] = {"tailcall", 1},
 	[OP_RET] = {"ret", 0},
 	[OP_HALT] = {"halt", 0},
 };
@@ -334,6 +372,11 @@ typedef struct {
 } cframe_t;
 
 typedef struct {
+	pthread_t id;
+	bool is_free;
+} thread_t;
+
+typedef struct {
 	cframe_t* calls;
 	size_t ncalls;
 	cframe_t* fp;
@@ -344,6 +387,7 @@ typedef struct {
 	
 	vref_t* open_vrefs;
 	map_t* globals;
+	thread_t threads[MAX_THREADS];
 	lur_t* ctx;
 } vm_t;
 
@@ -391,7 +435,7 @@ typedef enum {
 	T_COMMA,
 	T_COLON,
 	T_SEMICOLON,
-	T_LET,
+	T_IS,
 	T_DO,
 	T_END,
 	T_FUN,
@@ -576,13 +620,13 @@ static ast_node_t* ps_number(parser_t*);
 static ast_node_t* ps_text(parser_t*);
 static ast_node_t* ps_array(parser_t*);
 static ast_node_t* ps_map(parser_t*);
-static ast_node_t* ps_bind(parser_t*);
 static ast_node_t* ps_unary(parser_t*);
 static ast_node_t* ps_binary(parser_t*);
 static ast_node_t* ps_grouping(parser_t*);
 static ast_node_t* ps_block(parser_t*);
 static ast_node_t* ps_lambda(parser_t*);
 static ast_node_t* ps_call(parser_t*);
+static ast_node_t* ps_call_no_args(parser_t*);
 static ast_node_t* ps_return(parser_t*);
 static ast_node_t* ps_branch(parser_t*);
 static ast_node_t* ps_dot(parser_t*);
@@ -606,7 +650,7 @@ static parse_rule_t RULES[] = {
 	[T_TEXT] =
 		{ps_text, NULL, PREC_NONE},
 	[T_EQ] =
-		{NULL, ps_binary, PREC_EQ},
+		{NULL, NULL, PREC_NONE},
 	[T_EQ_GT] =
 		{NULL, NULL, PREC_NONE},
 	[T_BANG] =
@@ -674,9 +718,9 @@ static parse_rule_t RULES[] = {
 	[T_COLON] =
 		{NULL, ps_call, PREC_CALL},
 	[T_SEMICOLON] =
-		{NULL, NULL, PREC_NONE},
-	[T_LET] =
-		{ps_bind, NULL, PREC_NONE},
+		{NULL, ps_call_no_args, PREC_CALL},
+	[T_IS] =
+		{NULL, ps_binary, PREC_EQ},
 	[T_DO] =
 		{ps_block, NULL, PREC_NONE},
 	[T_END] =
@@ -735,6 +779,7 @@ typedef struct comp_t {
 typedef struct {
 	ptrdiff_t bytes;
 	size_t total;
+	size_t next_gc;
 	obj_t* objs;
 	int gc_pause;
 	obj_t** marked;
@@ -743,15 +788,25 @@ typedef struct {
 	size_t gc_cycles;
 } mem_t;
 
+typedef struct {
+	ssize_t memory_limit;
+} lur_config_t;
+
 typedef struct lur_t {
+	lur_config_t cfg;
 	comp_t cl;
 	vm_t vm;
+	size_t cur_vm;
 	mem_t mem;
 	bool running;
 	bool interpreter;
 	jmp_buf errjmp;
 	map_t* std_map;
 	const char* std_map_name;
+	fref_t* thread_fref;
+	array_t* thread_args;
+	value_t thread_retval;
+	array_t* argv;
 } lur_t;
 
 static unsigned nextpow2(unsigned n) {
@@ -839,7 +894,12 @@ static void* mem_resize(
 	if (ctx) {
 		ctx->mem.bytes += ns - os;
 		ctx->mem.total += ns;
-		if (ns > os)
+		
+		if (ctx->cfg.memory_limit != -1 &&
+			ctx->mem.bytes + ns > ctx->cfg.memory_limit)
+			error(ctx, ERR_OUT_OF_MEMORY);
+		
+		if (ns > os && ctx->mem.bytes > ctx->mem.next_gc)
 			gc_collect(ctx);
 	}
 	
@@ -1087,16 +1147,16 @@ static text_t* text_reverse(const text_t* text, lur_t* ctx) {
 #define min3(a, b, c) min2(a, min2(b, c))
 
 static int32_t text_edit_distance(
-	const text_t* a, const text_t* b)
+	const text_t* a, const text_t* b, lur_t* ctx)
 {
-	assert(a && b);
+	assert(a && b && ctx);
 	if (strcmp((const char*)a->buffer,
 		(const char*)b->buffer) == 0) return 0;
 	if (a->len == 0) return b->len;
 	if (b->len == 0) return a->len;
     
-	int* v0 = malloc((b->len + 1) * sizeof(int));
-	int* v1 = malloc((b->len + 1) * sizeof(int));
+	int* v0 = mem_alloc(ctx, (b->len + 1) * sizeof(int));
+	int* v1 = mem_alloc(ctx, (b->len + 1) * sizeof(int));
     
     for (int i = 0; i < b->len + 1; i++)
         v0[i] = i;
@@ -1115,8 +1175,8 @@ static int32_t text_edit_distance(
     }
     
 	int distance = v1[b->len];
-	free(v0);
-	free(v1);
+	mem_free(ctx, v0, (b->len + 1) * sizeof(int));
+	mem_free(ctx, v1, (b->len + 1) * sizeof(int));
 	return distance;
 }
 
@@ -1129,6 +1189,11 @@ static void text_print(const text_t* text) {
 }
 
 static void text_eprint(const text_t* text) {
+	assert(text);
+	lur_dprintf("%.*s", (int)text->len, text->buffer);
+}
+
+static void text_dprint(const text_t* text) {
 	assert(text);
 	lur_dprintf("%.*s", (int)text->len, text->buffer);
 }
@@ -1423,20 +1488,30 @@ static bool map_eq(const map_t* a, const map_t* b) {
 	return true;
 }
 
-static uint64_t value_hash(value_t, lur_t*);
+static uint32_t value_hash(value_t, lur_t*);
 
 static map_entry_t* map_find_entry(
-	map_entry_t* entries, size_t cap, value_t key,
-	lur_t* ctx)
+	map_entry_t* entries, size_t cap, value_t key, lur_t* ctx)
 {
-	assert(entries && ctx);
-	uint64_t hash = value_hash(key, ctx);
-	uint64_t index = hash & (cap - 1);
+	assert(entries);
+	uint32_t hash = value_hash(key, ctx);
+	uint32_t index = hash & (cap - 1);
+	;map_entry_t* tombstone = NULL;
+	
 	for (;;) {
-		const map_entry_t* entry = &entries[index];
-		if (entry->key.tag == TYPE_NONE ||
-			value_eq(entry->key, key))
-			return (map_entry_t*)entry;
+		map_entry_t* entry = &entries[index];
+		
+		if (entry->key.tag == TYPE_NONE) {
+			if (entry->value.tag == TYPE_NONE) {
+				return tombstone ? tombstone : entry;
+			} else {
+				if (!tombstone)
+					tombstone = entry;
+			}
+		} else if (value_eq(entry->key, key)) {
+			return entry;
+		}
+		
 		index = (index + 1) & (cap - 1);
 	}
 }
@@ -1453,14 +1528,16 @@ static void map_set_cap(
 		entries[i].value = make_none();
 	}
 	
+	map->len = 0;
 	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* src = &map->entries[i];
 		if (src->key.tag == TYPE_NONE) continue;
 		
-		map_entry_t* dest = map_find_entry(
+		map_entry_t* dst = map_find_entry(
 			entries, cap, src->key, ctx);
-		dest->key = src->key;
-		dest->value = src->value;
+		dst->key = src->key;
+		dst->value = src->value;
+		map->len++;
 	}
 	
 	arr_free(ctx, map->entries, map_entry_t, map->cap);
@@ -1479,8 +1556,10 @@ static bool map_set(
 	
 	map_entry_t* entry = map_find_entry(
 		map->entries, map->cap, key, ctx);
+	
 	bool is_new = entry->key.tag == TYPE_NONE;
-	if (is_new) map->len++;
+	if (is_new && entry->value.tag == TYPE_NONE)
+		map->len++;
 	
 	entry->key = key;
 	entry->value = value;
@@ -1505,10 +1584,24 @@ bool map_get(
 	return true;
 }
 
+bool map_del(map_t* map, value_t key, lur_t* ctx) {
+	assert(map && ctx);
+	if (map->len == 0) return false;
+	
+	map_entry_t* entry = map_find_entry(
+		map->entries, map->cap, key, ctx);
+	if (entry->key.tag == TYPE_NONE) return false;
+	
+	entry->key = make_none();
+	entry->value = make_bool(true);
+	map->len--;
+	return true;
+}
+
 static void map_extend(
 	map_t* dst, const map_t* src, lur_t* ctx)
 {
-	assert(src && dst && ctx);
+	assert(dst && src && ctx);
 	for (size_t i = 0; i < src->cap; i++) {
 		const map_entry_t* entry = &src->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
@@ -1676,16 +1769,24 @@ static text_t* value_to_text_ex(
 	gc_pause(ctx);
 	
 	switch (value.tag) {
-	case TYPE_NONE:
+	case TYPE_NONE: {
 		result = text_lit("none", ctx);
 		break;
-	case TYPE_BOOL:
+	}
+	case TYPE_BOOL: {
 		result = text_lit(
 			(get_bool(value)) ? "true" : "false", ctx);
 		break;
-	case TYPE_NUMBER:
-		result = text_fmt(ctx, "%f", get_number(value));
+	}
+	case TYPE_NUMBER: {
+		double number = get_number(value);
+		if (trunc(number) == number) {
+			
+			result = text_fmt(ctx, "%.16g", number);
+		} else
+			result = text_fmt(ctx, "%f", number);
 		break;
+	}
 	case TYPE_TEXT: {
 		if (quote_text) {
 			result = text_lit("\"", ctx);
@@ -1773,9 +1874,21 @@ static void value_print_ex(
 	text_print(value_to_text_ex(value, quote_text, ctx));
 }
 
+static void value_dprint_ex(
+	value_t value, bool quote_text, lur_t* ctx)
+{
+	assert(ctx);
+	text_dprint(value_to_text_ex(value, quote_text, ctx));
+}
+
 static void value_print(value_t value, lur_t* ctx) {
 	assert(ctx);
 	text_print(value_to_text(value, ctx));
+}
+
+static void value_dprint(value_t value, lur_t* ctx) {
+	assert(ctx);
+	text_dprint(value_to_text(value, ctx));
 }
 
 static bool value_eq(value_t a, value_t b) {
@@ -1993,19 +2106,25 @@ static value_t value_math(
 
 #undef typecheck
 
-static uint64_t value_hash(value_t value, lur_t* ctx) {
+static uint32_t value_hash(value_t value, lur_t* ctx) {
 	assert(ctx);
 	switch (value.tag) {
-	case TYPE_BOOL: return get_bool(value);
+	case TYPE_NONE: return 0;
+	case TYPE_BOOL: return get_bool(value) + 1;
 	case TYPE_NUMBER: return get_number(value);
 	case TYPE_TEXT: {
 		const text_t* text = get_text(value);
-		uint64_t hash = 2166136261u;
+		uint32_t hash = 2166136261u;
 		for (int i = 0; i < text->len; i++) {
 			hash ^= text->buffer[i];
     		hash *= 16777619;
 		}
 		return hash;
+	}
+	case TYPE_ARRAY:
+	case TYPE_MAP: {
+		const text_t* text = value_to_text(value, ctx);
+		return value_hash(make_text(text), ctx);
 	}
 	case TYPE_FUNC: {
 		const func_t* func = get_func(value);
@@ -2013,9 +2132,9 @@ static uint64_t value_hash(value_t value, lur_t* ctx) {
 	}
 	case TYPE_FREF: {
 		const fref_t* fref = get_fref(value);
-		return value_hash(make_function(fref->func), ctx);
+		return value_hash(make_text(fref->func->name), ctx);
 	}
-	default: error(ctx, ERR_NOT_HASHABLE(value.tag));
+	default: unreachable();
 	}
 	
 	return 0;
@@ -2025,7 +2144,7 @@ static void gc_mark_obj(obj_t* obj, lur_t* ctx) {
 	assert(ctx);
 	if (!obj || obj->marked) return;
 	obj->marked = true;
-	ctx->mem.marked = realloc(ctx->mem.marked,
+	ctx->mem.marked = lur_gc_realloc(ctx->mem.marked,
 		sizeof(obj_t*) * ctx->mem.nmarked + 1);
 	if (!ctx->mem.marked)
 		error(ctx, ERR_OUT_OF_MEMORY);
@@ -2097,6 +2216,9 @@ static void gc_collect(lur_t* ctx) {
 	gc_mark(ctx);
 	gc_trace_refs(ctx);
 	gc_sweep(ctx);
+	
+	ctx->mem.next_gc = ctx->mem.bytes *
+		GC_GROW_FACTOR;
 	ctx->mem.gc_cycles++;
 }
 
@@ -2123,6 +2245,9 @@ static void gc_mark(lur_t* ctx) {
 		gc_mark_value(entry->key, ctx);
 		gc_mark_value(entry->value, ctx);
 	}
+	
+	for (int i = 0; i < ctx->argv->len; i++)
+		gc_mark_value(ctx->argv->items[i], ctx);
 }
 
 static void gc_trace_refs(lur_t* ctx) {
@@ -2186,6 +2311,10 @@ static void vm_init(vm_t* vm, lur_t* ctx) {
 	
 	vm->open_vrefs = NULL;
 	vm->globals = map_new(ctx);
+	
+	for (size_t i = 0; i < MAX_THREADS; i++)
+		vm->threads[i].is_free = true;
+	
 	vm->ctx = ctx;
 	gc_resume(ctx);
 }
@@ -2533,40 +2662,6 @@ static value_t vm_launch(
 			break;
 		}
 		case OP_GETFIELD: {
-			if (get(0).tag == TYPE_ARRAY) {
-				gc_pause(vm->ctx);
-				
-				const array_t* array = get_array(pop());
-				value_t key = vm->fp->func->data[read_u16()];
-				if (value_eq(key,
-					make_text(text_lit("x", vm->ctx))))
-				{
-					push(array->items[
-						array_convert_index(array, 0.0, vm->ctx)]);
-				} else if (value_eq(key,
-					make_text(text_lit("y", vm->ctx))))
-				{
-					push(array->items[
-						array_convert_index(array, 1.0, vm->ctx)]);
-				} else if (value_eq(key,
-					make_text(text_lit("z", vm->ctx))))
-				{
-					push(array->items[
-						array_convert_index(array, 2.0, vm->ctx)]);
-				} else if (value_eq(key,
-					make_text(text_lit("w", vm->ctx))))
-				{
-					push(array->items[
-						array_convert_index(array, 3.0, vm->ctx)]);
-				} else {
-					error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
-					unreachable();
-				}
-				
-				gc_resume(vm->ctx);
-				break;
-			}
-			
 			typecheck(0, TYPE_MAP);
 			map_t* map = get_map(get(0));
 			value_t key = vm->fp->func->data[read_u16()];
@@ -2578,46 +2673,6 @@ static value_t vm_launch(
 			break;
 		}
 		case OP_SETFIELD: {
-			if (get(1).tag == TYPE_ARRAY) {
-				gc_pause(vm->ctx);
-				
-				value_t value = pop();
-				const array_t* array = get_array(pop());
-				value_t key = vm->fp->func->data[read_u16()];
-				if (value_eq(key,
-					make_text(text_lit("x", vm->ctx))))
-				{
-					array->items[
-						array_convert_index(array, 0.0, vm->ctx)] =
-							value;
-				} else if (value_eq(key,
-					make_text(text_lit("y", vm->ctx))))
-				{
-					array->items[
-						array_convert_index(array, 1.0, vm->ctx)] =
-							value;
-				} else if (value_eq(key,
-					make_text(text_lit("z", vm->ctx))))
-				{
-					array->items[
-						array_convert_index(array, 2.0, vm->ctx)] =
-							value;
-				} else if (value_eq(key,
-					make_text(text_lit("w", vm->ctx))))
-				{
-					array->items[
-						array_convert_index(array, 3.0, vm->ctx)] =
-							value;
-				} else {
-					error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
-					unreachable();
-				}
-				
-				push(value);
-				gc_resume(vm->ctx);
-				break;
-			}
-			
 			typecheck(1, TYPE_MAP);
 			map_t* map = get_map(get(1));
 			value_t key = vm->fp->func->data[read_u16()];
@@ -2718,6 +2773,19 @@ static value_t vm_launch(
 			vm_call(vm, get(argc), argc, false);
 			break;
 		}
+		case OP_TAILCALL: {
+			uint8_t argc = read_u8();
+			const fref_t* fref = get_fref(get(argc));
+			if (argc != fref->func->argc)
+				error(vm->ctx, ERR_ARGC(
+					fref->func->name, argc, fref->func->argc));
+			
+			vm->fp->func = fref->func;
+			vm->fp->fref = fref;
+			vm->fp->ip = fref->func->ops;
+			vm->fp->slots = (vm->sp - vm->stack) - argc - 1;
+			break;
+		}
 		case OP_RET: {
 			value_t ret = pop();
 			vm_close_vrefs(vm, vm->fp->slots);
@@ -2735,7 +2803,7 @@ static value_t vm_launch(
 			#endif
 			#endif
 			
-			if (returns) return make_none();
+			if (returns) return get(0);
 			break;
 		}
 		case OP_HALT: {
@@ -2779,7 +2847,7 @@ static void vm_call(
 	if (vm->ncalls == MAX_CFRAMES)
 		error(vm->ctx, ERR_LIMIT(
 			"call stack", MAX_CFRAMES));
-	
+			
 	cframe_t call;
 	call.func = fref->func;
 	call.fref = fref;
@@ -2844,10 +2912,27 @@ static token_t sc_next(scanner_t* sc) {
 	
 	while (isspace((unsigned char)*sc->pos) ||
 		(*sc->pos == '-' && sc->pos[1] == '-')) {
+		bool is_multiline = *sc->pos == '-' &&
+			sc->pos[1] == '-' &&
+			sc->pos[2] == '[';
+		
 		if (*sc->pos == '-' && sc->pos[1] == '-') {
-			while (*sc->pos != '\n' && *sc->pos != '\0')
+			while ((*sc->pos != '\n' || is_multiline) &&
+				*sc->pos != '\0')
+			{
+				if (is_multiline && *sc->pos == '-' &&
+					sc->pos[1] == '-' && sc->pos[2] == ']')
+				{
+					sc->pos += 3;
+					is_multiline = false;
+					break;
+				}
 				sc->pos++;
+			}
 		}
+			
+		if (is_multiline)
+			error(sc->ctx, ERR_UNTERMINATED_COMMENT);
 		
 		if (*sc->pos == '\n')
 			sc->line++;
@@ -2869,10 +2954,10 @@ static token_t sc_next(scanner_t* sc) {
 			(strlen(kw) == len && \
 				strncmp(start, kw, len) == 0)
 		
+		if (keyword("is")) return make(T_IS);
 		if (keyword("none")) return make(T_NONE);
 		if (keyword("true")) return make(T_TRUE);
 		if (keyword("false")) return make(T_FALSE);
-		if (keyword("let")) return make(T_LET);
 		if (keyword("do")) return make(T_DO);
 		if (keyword("end")) return make(T_END);
 		if (keyword("fun")) return make(T_FUN);
@@ -3097,6 +3182,47 @@ static ast_node_t* ps_name(parser_t* ps) {
 		return node;
 	}
 	
+	if (ps_match(ps, T_EQ)) {
+		node->tag = AST_BIND;
+		node->data.bind.name = name;
+		node->data.bind.value = ps_expr(ps);
+		return node;
+	}
+	
+	if (ps_match(ps, T_LPAREN)) {
+		node->tag = AST_FUN;
+		node->data.fun.name = name;
+		node->data.fun.is_lambda = false;
+		node->data.fun.nparams = 0;
+	
+		while (!ps_check(ps, T_EOF) &&
+			!ps_check(ps, T_RPAREN))
+		{
+			if (node->data.fun.nparams == MAX_ARGS)
+				error(ps->ctx, ERR_LIMIT(
+					"max args", MAX_ARGS));
+		
+			ps_eat(ps, T_NAME, "expected parameter name");
+			arr_alloc(ps->ctx,
+				node->data.fun.params,
+				text_t*,
+				node->data.fun.nparams,
+				node->data.fun.nparams + 1);
+			node->data.fun.params[
+				node->data.fun.nparams++] = ps->prev.lex;
+				
+			if (!ps_match(ps, T_COMMA))
+				break;
+		}
+	
+		ps_eat(ps, T_RPAREN,
+			"expected ')' after parameters");
+		ps_eat(ps, T_EQ, "expected '=' after ')'");
+	
+		node->data.fun.body = ps_expr(ps);
+		return node;
+	}
+	
 	node->tag = AST_LOAD;
 	node->data.load.name = name;
 	return node;
@@ -3222,55 +3348,6 @@ static ast_node_t* ps_map(parser_t* ps) {
 	return node;
 }
 
-static ast_node_t* ps_bind(parser_t* ps) {
-	assert(ps);
-	ps_eat(ps, T_NAME, "expected name after 'let'");
-	const text_t* name = ps->prev.lex;
-	
-	if (ps_match(ps, T_LPAREN)) {
-		ast_node_t* node = ps_new_node(ps);
-		node->tag = AST_FUN;
-		node->data.fun.name = name;
-		node->data.fun.is_lambda = false;
-		node->data.fun.nparams = 0;
-	
-		while (!ps_check(ps, T_EOF) &&
-			!ps_check(ps, T_RPAREN))
-		{
-			if (node->data.fun.nparams == MAX_ARGS)
-				error(ps->ctx, ERR_LIMIT(
-					"max args", MAX_ARGS));
-		
-			ps_eat(ps, T_NAME, "expected parameter name");
-			arr_alloc(ps->ctx,
-				node->data.fun.params,
-				text_t*,
-				node->data.fun.nparams,
-				node->data.fun.nparams + 1);
-			node->data.fun.params[
-				node->data.fun.nparams++] = ps->prev.lex;
-				
-			if (!ps_match(ps, T_COMMA))
-				break;
-		}
-	
-		ps_eat(ps, T_RPAREN,
-			"expected ')' after parameters");
-		ps_eat(ps, T_EQ, "expected '=' after ')'");
-	
-		node->data.fun.body = ps_expr(ps);
-		return node;
-	}
-	
-	ast_node_t* node = ps_new_node(ps);
-	node->tag = AST_BIND;
-	node->data.bind.name = ps->prev.lex;
-	
-	ps_eat(ps, T_EQ, "expected '=' after variable name");
-	node->data.bind.value = ps_expr(ps);
-	return node;
-}
-
 static ast_node_t* ps_unary(parser_t* ps) {
 	assert(ps);
 	ast_node_t* node = ps_new_node(ps);
@@ -3306,7 +3383,7 @@ static ast_node_t* ps_binary(parser_t* ps) {
 	
 	int opcode = OP_NOP;
 	switch (tag) {
-	case T_EQ: opcode = OP_EQ; break;
+	case T_IS: opcode = OP_EQ; break;
 	case T_BANG_EQ: opcode = OP_NE; break;
 	case T_LT: opcode = OP_LT; break;
 	case T_LT_EQ: opcode = OP_LTE; break;
@@ -3418,6 +3495,16 @@ static ast_node_t* ps_call(parser_t* ps) {
 	return node;
 }
 
+static ast_node_t* ps_call_no_args(parser_t* ps) {
+	assert(ps);
+	ast_node_t* node = ps_new_node(ps);
+	node->tag = AST_CALL;
+	node->data.call.func = ps->prefix;
+	node->data.call.argc = 0;
+	node->data.call.args = NULL;
+	return node;
+}
+
 static ast_node_t* ps_return(parser_t* ps) {
 	assert(ps);
 	ast_node_t* node = ps_new_node(ps);
@@ -3457,7 +3544,10 @@ static ast_node_t* ps_dot(parser_t* ps) {
 		ps_match(ps, T_PLUS_EQ) ||
 		ps_match(ps, T_MINUS_EQ) ||
 		ps_match(ps, T_STAR_EQ) ||
-		ps_match(ps, T_SLASH_EQ);
+		ps_match(ps, T_CARET_EQ) ||
+		ps_match(ps, T_SLASH_EQ) ||
+		ps_match(ps, T_PERCENT_EQ) ||
+		ps_match(ps, T_AMPER_EQ);
 	node->data.dot.tag = ps->prev.tag;
 	
 	if (node->data.dot.is_assignment)
@@ -3784,7 +3874,6 @@ static void cl_compile_ast(
 		}
 		
 		cl_write(cl, OP_DUP);
-		
 		break;
 	}
 	case AST_LOAD: {
@@ -3929,7 +4018,8 @@ static void cl_compile_ast(
 		for (uint8_t i = 0; i < call->argc; i++)
 			cl_compile_ast(cl, call->args[i]);
 		
-		cl_write(cl, OP_CALL);
+		bool is_tailcall = false;
+		cl_write(cl, (is_tailcall) ? OP_TAILCALL : OP_CALL);
 		cl_write(cl, call->argc);
 		break;
 	}
@@ -3960,8 +4050,11 @@ static void cl_compile_ast(
 			case T_PLUS_EQ: cl_write(cl, OP_ADD); break;
 			case T_MINUS_EQ: cl_write(cl, OP_SUB); break;
 			case T_STAR_EQ: cl_write(cl, OP_MUL); break;
+			case T_CARET_EQ: cl_write(cl, OP_POW); break;
 			case T_SLASH_EQ: cl_write(cl, OP_DIV); break;
-			default: break;
+			case T_PERCENT_EQ: cl_write(cl, OP_REM); break;
+			case T_AMPER_EQ: cl_write(cl, OP_CON); break;
+			default: unreachable();
 			}
 			
 			cl_write(cl, OP_SETFIELD);
@@ -4166,94 +4259,12 @@ static void cl_compile(
 	cl_free_ast(cl, ast);
 }
 
-static double math_rand(double start, double end) {
-	double scale = rand() / (double)RAND_MAX;
-	return start + scale * (end - start);
-}
-
-static text_t* io_read(const text_t* path, lur_t* ctx) {
-	assert(path && ctx);
-	FILE* fp = fopen((const char*)path->buffer, "r");
-	if (!fp) error(ctx, ERR_READ_FAILED(path));
-	
-	fseek(fp, 0, SEEK_END);
-	size_t len = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
-	
-	text_t* text = text_new(NULL, len, ctx);
-	fread(text->buffer, 1, len, fp);
-	fclose(fp);
-	return text;
-}
-
-static text_t* io_read_stdin(lur_t* ctx) {
-	assert(ctx);
-	
-	char* line = NULL;
-	size_t len = 0;
-	if (getline(&line, &len, stdin) == -1) {
-		free(line);
-		error(ctx, ERR_READ_FAILED(text_lit("stdin", ctx)));
-	}
-	
-	text_t* text = text_new(
-		(const uint8_t*)line, strlen(line), ctx);
-	free(line);
-	return text;
-}
-
-static void io_write(
-	const text_t* path, const text_t* output, lur_t* ctx)
-{
-	assert(path && output && ctx);
-	FILE* fp = fopen((const char*)path->buffer, "w");
-	if (!fp) error(ctx, ERR_WRITE_FAILED(path));
-	fputs((char*)output->buffer, fp);
-	fclose(fp);
-}
-
-static void io_append(
-	const text_t* path, const text_t* output, lur_t* ctx)
-{
-	assert(path && output && ctx);
-	FILE* fp = fopen((const char*)path->buffer, "a");
-	if (!fp) error(ctx, ERR_WRITE_FAILED(path));
-	fputs((char*)output->buffer, fp);
-	fclose(fp);
-}
-
-static size_t io_file_size(const text_t* path, lur_t* ctx) {
-	assert(path && ctx);
-	FILE* fp = fopen((const char*)path->buffer, "r");
-	if (!fp) error(ctx, ERR_READ_FAILED(path));
-	fseek(fp, 0, SEEK_END);
-	size_t len = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
-	return len;
-}
-
-static const char* get_platform(void) {
-	#ifdef _WIN32
-    return "Windows 32-bit";
-    #elif _WIN64
-    return "Windows 64-bit";
-    #elif __APPLE__ || __MACH__
-    return "Mac OSX";
-    #elif __linux__
-    return "Linux";
-    #elif __FreeBSD__
-    return "FreeBSD";
-    #elif __unix || __unix__
-    return "Unix";
-    #else
-    return "Unknown";
-    #endif
-}
-
 #define typecheck(arg, t) \
 	if (args[arg].tag != (t)) \
 		error(ctx, ERR_TYPECHECK_ARG( \
 			args[arg].tag, (t), arg))
+			
+static text_t* io_read(const text_t*, lur_t*);
 
 static value_t std_load(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -4345,11 +4356,6 @@ static value_t std_while(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_call(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_FREF);
-	return lur_call_function(ctx, get_fref(args[0]), NULL, 0);
-}
-
 static value_t std_range(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -4411,24 +4417,99 @@ static value_t std_enum(value_t* args, lur_t* ctx) {
 	return make_map(enum_);
 }
 
-static value_t std_timestamp(value_t* args, lur_t* ctx) {
+static value_t std_time_now(value_t* args, lur_t* ctx) {
+	time_t current_time;
+	time(&current_time);
+	const char* str = ctime(&current_time);
+	return make_text(text_lit(str, ctx));
+}
+
+static value_t std_time_year(value_t* args, lur_t* ctx) {
+	time_t now = time(NULL);
+	struct tm* t = localtime(&now);
+	return make_number(t->tm_year + 1900);
+}
+
+static value_t std_time_month(value_t* args, lur_t* ctx) {
+	time_t now = time(NULL);
+	struct tm* t = localtime(&now);
+	return make_number(t->tm_mon + 1);
+}
+
+static value_t std_time_day(value_t* args, lur_t* ctx) {
+	time_t now = time(NULL);
+	struct tm* t = localtime(&now);
+	return make_number(t->tm_mday);
+}
+
+static value_t std_time_hour(value_t* args, lur_t* ctx) {
+	time_t now = time(NULL);
+	struct tm* t = localtime(&now);
+	return make_number(t->tm_hour);
+}
+
+static value_t std_time_minute(value_t* args, lur_t* ctx) {
+	time_t now = time(NULL);
+	struct tm* t = localtime(&now);
+	return make_number(t->tm_min);
+}
+
+static value_t std_time_second(value_t* args, lur_t* ctx) {
+	time_t now = time(NULL);
+	struct tm* t = localtime(&now);
+	return make_number(t->tm_sec);
+}
+
+static value_t std_time_timestamp(
+	value_t* args, lur_t* ctx)
+{
 	return make_number(time(NULL));
 }
 
-static value_t std_sys_cmd(value_t* args, lur_t* ctx) {
+static value_t std_time_clock(value_t* args, lur_t* ctx) {
+	return make_number((double)clock() /
+		CLOCKS_PER_SEC);
+}
+
+static value_t std_time_sleep(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	double secs = get_number(args[0]) * 1000.0 * 1000.0;
+	usleep(secs);
+	return make_none();
+}
+
+static const char* system_get_platform(void) {
+	#ifdef _WIN32
+    return "Windows 32-bit";
+    #elif _WIN64
+    return "Windows 64-bit";
+    #elif __APPLE__ || __MACH__
+    return "Mac OSX";
+    #elif __linux__
+    return "Linux";
+    #elif __FreeBSD__
+    return "FreeBSD";
+    #elif __unix || __unix__
+    return "Unix";
+    #else
+    return "Unknown";
+    #endif
+}
+
+static value_t std_system_cmd(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	system((const char*)get_text(args[0])->buffer);
 	return make_none();
 }
 
-static value_t std_sys_exit(value_t* args, lur_t* ctx) {
+static value_t std_system_exit(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	exit(get_number(args[0]));
 }
 
-static value_t std_sys_clock(value_t* args, lur_t* ctx) {
-	return make_number((double)clock() /
-		CLOCKS_PER_SEC);
+static double math_rand(double start, double end) {
+	double scale = rand() / (double)RAND_MAX;
+	return start + scale * (end - start);
 }
 
 static value_t std_math_eqf(value_t* args, lur_t* ctx) {
@@ -4675,7 +4756,7 @@ static value_t std_math_hex(value_t* args, lur_t* ctx) {
 	
 	typecheck(0, TYPE_NUMBER);
 	return make_text(text_fmt(
-		ctx, "0x%x", (uint64_t)get_number(args[0])));
+		ctx, "0x%x", (int64_t)get_number(args[0])));
 }
 
 static value_t std_math_bin(value_t* args, lur_t* ctx) {
@@ -4694,6 +4775,30 @@ static value_t std_math_bin(value_t* args, lur_t* ctx) {
 
 static value_t std_math_hash(value_t* args, lur_t* ctx) {
 	return make_number(value_hash(args[0], ctx));
+}
+
+static value_t std_vec_x(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* vec = get_array(args[0]);
+	return vec->items[0];
+}
+
+static value_t std_vec_y(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* vec = get_array(args[0]);
+	return vec->items[1];
+}
+
+static value_t std_vec_z(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* vec = get_array(args[0]);
+	return vec->items[2];
+}
+
+static value_t std_vec_w(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* vec = get_array(args[0]);
+	return vec->items[3];
 }
 
 static value_t std_vec_size(value_t* args, lur_t* ctx) {
@@ -4850,14 +4955,14 @@ static value_t std_text_cmp(value_t* args, lur_t* ctx) {
 	return make_text(text_cmp(a, b));
 }
 
-static value_t std_text_chars(value_t* args, lur_t* ctx) {
+static value_t std_text_bytes(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
-	array_t* chars = array_new(ctx);
+	array_t* bytes = array_new(ctx);
 	for (size_t i = 0; i < text->len; i++)
-		array_push(chars, make_text(text_new(
+		array_push(bytes, make_text(text_new(
 			text->buffer + i, 1, ctx)), ctx);
-	return make_array(chars);
+	return make_array(bytes);
 }
 
 static value_t std_text_ascii(value_t* args, lur_t* ctx) {
@@ -4869,33 +4974,7 @@ static value_t std_text_ascii(value_t* args, lur_t* ctx) {
 	return make_array(ascii);
 }
 
-static value_t std_text_slice(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_TEXT);
-	typecheck(1, TYPE_NUMBER);
-	typecheck(2, TYPE_NUMBER);
-	
-	const text_t* text = get_text(args[0]);
-	double start = get_number(args[1]);
-	if (start < 0)
-		start = text->len + start;
-	if (start >= text->len)
-		error(ctx, ERR_INDEX(args[1]));
-		
-	double end = get_number(args[2]);
-	if (end < 0)
-		end = text->len + end;
-	if (end >= text->len)
-		error(ctx, ERR_INDEX(args[1]));
-	
-	text_t* new_text = text_new(
-		text->buffer + (size_t)start,
-		end - start,
-		ctx);
-	new_text->buffer[new_text->len] = '\0';
-	return make_text(new_text);
-}
-
-static value_t std_text_split(value_t* args, lur_t* ctx) {
+static value_t std_text_words(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	const text_t* input = get_text(args[0]);
@@ -4924,6 +5003,32 @@ static value_t std_text_split(value_t* args, lur_t* ctx) {
 	}
 	
 	return make_array(parts);
+}
+
+static value_t std_text_slice(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	typecheck(1, TYPE_NUMBER);
+	typecheck(2, TYPE_NUMBER);
+	
+	const text_t* text = get_text(args[0]);
+	double start = get_number(args[1]);
+	if (start < 0)
+		start = text->len + start;
+	if (start >= text->len)
+		error(ctx, ERR_INDEX(args[1]));
+		
+	double end = get_number(args[2]);
+	if (end < 0)
+		end = text->len + end;
+	if (end >= text->len)
+		error(ctx, ERR_INDEX(args[1]));
+	
+	text_t* new_text = text_new(
+		text->buffer + (size_t)start,
+		end - start,
+		ctx);
+	new_text->buffer[new_text->len] = '\0';
+	return make_text(new_text);
 }
 
 static value_t std_text_to_upper(
@@ -5120,15 +5225,15 @@ static value_t std_text_edit_dist(
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	return make_number(text_edit_distance(
-		get_text(args[0]), get_text(args[1])));
+		get_text(args[0]), get_text(args[1]), ctx));
 }
 
-static value_t std_arr_len(value_t* args, lur_t* ctx) {
+static value_t std_array_len(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_number(get_array(args[0])->len);
 }
 
-static value_t std_arr_get(value_t* args, lur_t* ctx) {
+static value_t std_array_get(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
 	size_t index = array_convert_index(
@@ -5136,7 +5241,7 @@ static value_t std_arr_get(value_t* args, lur_t* ctx) {
 	return array->items[(size_t)index];
 }
 
-static value_t std_arr_set(value_t* args, lur_t* ctx) {
+static value_t std_array_set(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
 	size_t index = array_convert_index(
@@ -5145,7 +5250,7 @@ static value_t std_arr_set(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_arr_insert(value_t* args, lur_t* ctx) {
+static value_t std_array_insert(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	array_t* array = get_array(args[0]);
@@ -5158,7 +5263,7 @@ static value_t std_arr_insert(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_arr_del(value_t* args, lur_t* ctx) {
+static value_t std_array_del(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	array_t* array = get_array(args[0]);
@@ -5168,12 +5273,12 @@ static value_t std_arr_del(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_arr_pop(value_t* args, lur_t* ctx) {
+static value_t std_array_pop(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return array_pop(get_array(args[0]), ctx);
 }
 
-static value_t std_arr_head(value_t* args, lur_t* ctx) {
+static value_t std_array_head(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
@@ -5181,7 +5286,7 @@ static value_t std_arr_head(value_t* args, lur_t* ctx) {
 	return array->items[0];
 }
 
-static value_t std_arr_tail(value_t* args, lur_t* ctx) {
+static value_t std_array_tail(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
@@ -5191,7 +5296,7 @@ static value_t std_arr_tail(value_t* args, lur_t* ctx) {
 	return make_array(tail);
 }
 
-static value_t std_arr_last(value_t* args, lur_t* ctx) {
+static value_t std_array_last(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
@@ -5199,7 +5304,7 @@ static value_t std_arr_last(value_t* args, lur_t* ctx) {
 	return array->items[array->len - 1];
 }
 
-static value_t std_arr_fill(value_t* args, lur_t* ctx) {
+static value_t std_array_fill(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_FREF);
 	size_t n = get_number(args[0]);
@@ -5213,7 +5318,7 @@ static value_t std_arr_fill(value_t* args, lur_t* ctx) {
 	return make_array(array);
 }
 
-static value_t std_arr_repeat(value_t* args, lur_t* ctx) {
+static value_t std_array_repeat(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	const array_t* array = get_array(args[0]);
@@ -5221,7 +5326,7 @@ static value_t std_arr_repeat(value_t* args, lur_t* ctx) {
 	return make_array(array_repeat(array, n, ctx));
 }
 
-static value_t std_arr_rotate(value_t* args, lur_t* ctx) {
+static value_t std_array_rotate(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	const array_t* array = get_array(args[0]);
@@ -5232,7 +5337,7 @@ static value_t std_arr_rotate(value_t* args, lur_t* ctx) {
 	return make_array(array_rotate_right(array, n, ctx));
 }
 
-static value_t std_arr_count(value_t* args, lur_t* ctx) {
+static value_t std_array_count(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	size_t count = 0;
@@ -5242,13 +5347,13 @@ static value_t std_arr_count(value_t* args, lur_t* ctx) {
 	return make_number(count);
 }
 
-static value_t std_arr_contains(value_t* args, lur_t* ctx) {
+static value_t std_array_contains(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_bool(array_contains(
 		get_array(args[0]), args[1]));
 }
 
-static value_t std_arr_find(value_t* args, lur_t* ctx) {
+static value_t std_array_find(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(2, TYPE_NUMBER);
 	array_t* array = get_array(args[0]);
@@ -5264,7 +5369,7 @@ static value_t std_arr_find(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_arr_iter(value_t* args, lur_t* ctx) {
+static value_t std_array_iter(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -5278,7 +5383,7 @@ static value_t std_arr_iter(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_arr_iteri(value_t* args, lur_t* ctx) {
+static value_t std_array_iteri(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -5292,7 +5397,7 @@ static value_t std_arr_iteri(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_arr_map(value_t* args, lur_t* ctx) {
+static value_t std_array_map(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -5308,7 +5413,7 @@ static value_t std_arr_map(value_t* args, lur_t* ctx) {
 	return make_array(mapped);
 }
 
-static value_t std_arr_filter(value_t* args, lur_t* ctx) {
+static value_t std_array_filter(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -5325,7 +5430,7 @@ static value_t std_arr_filter(value_t* args, lur_t* ctx) {
 	return make_array(filtered);
 }
 
-static value_t std_arr_fold(value_t* args, lur_t* ctx) {
+static value_t std_array_fold(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(2, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -5340,13 +5445,13 @@ static value_t std_arr_fold(value_t* args, lur_t* ctx) {
 	return result;
 }
 
-static value_t std_arr_flat(value_t* args, lur_t* ctx) {
+static value_t std_array_flat(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_array(array_flat(
 		get_array(args[0]), ctx));
 }
 
-static value_t std_arr_dedup(value_t* args, lur_t* ctx) {
+static value_t std_array_dedup(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
 	array_t* result = array_new(ctx);
@@ -5356,7 +5461,7 @@ static value_t std_arr_dedup(value_t* args, lur_t* ctx) {
 	return make_array(result);
 }
 
-static value_t std_arr_sum(value_t* args, lur_t* ctx) {
+static value_t std_array_sum(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	
@@ -5371,7 +5476,7 @@ static value_t std_arr_sum(value_t* args, lur_t* ctx) {
 	return make_number(result);
 }
 
-static value_t std_arr_average(value_t* args, lur_t* ctx) {
+static value_t std_array_average(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	
@@ -5387,7 +5492,7 @@ static value_t std_arr_average(value_t* args, lur_t* ctx) {
 	return make_number(result);
 }
 
-static value_t std_arr_mean(value_t* args, lur_t* ctx) {
+static value_t std_array_mean(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	
@@ -5414,7 +5519,7 @@ static value_t std_arr_mean(value_t* args, lur_t* ctx) {
 	return make_number(result);
 }
 
-static value_t std_arr_any(value_t* args, lur_t* ctx) {
+static value_t std_array_any(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -5430,7 +5535,7 @@ static value_t std_arr_any(value_t* args, lur_t* ctx) {
 	return make_bool(false);
 }
 
-static value_t std_arr_all(value_t* args, lur_t* ctx) {
+static value_t std_array_all(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -5446,7 +5551,7 @@ static value_t std_arr_all(value_t* args, lur_t* ctx) {
 	return make_bool(true);
 }
 
-static value_t std_arr_sort(value_t* args, lur_t* ctx) {
+static value_t std_array_sort(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	value_t value;
 	bool get = map_get(ctx->vm.globals,
@@ -5459,14 +5564,14 @@ static value_t std_arr_sort(value_t* args, lur_t* ctx) {
 		get_array(args[0]), sorter, ctx));
 }
 
-static value_t std_arr_sort_by(value_t* args, lur_t* ctx) {
+static value_t std_array_sort_by(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	return make_array(array_sort(
 		get_array(args[0]), get_fref(args[1]), ctx));
 }
 
-static value_t std_arr_swap(value_t* args, lur_t* ctx) {
+static value_t std_array_swap(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
@@ -5483,12 +5588,12 @@ static value_t std_arr_swap(value_t* args, lur_t* ctx) {
 	return make_array(output);
 }
 
-static value_t std_arr_join(value_t* args, lur_t* ctx) {
+static value_t std_array_join(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_text(array_join(get_array(args[0]), ctx));
 }
 
-static value_t std_arr_zip(value_t* args, lur_t* ctx) {
+static value_t std_array_zip(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* arrays = get_array(args[0]);
 	array_t* zip = array_new(ctx);
@@ -5514,7 +5619,7 @@ static value_t std_arr_zip(value_t* args, lur_t* ctx) {
 	return make_array(zip);
 }
 
-static value_t std_arr_chunk(value_t* args, lur_t* ctx) {
+static value_t std_array_chunk(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	array_t* original = get_array(args[0]);
@@ -5551,6 +5656,12 @@ static value_t std_map_get(value_t* args, lur_t* ctx) {
 static value_t std_map_set(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	map_set(get_map(args[0]), args[1], args[2], ctx);
+	return make_none();
+}
+
+static value_t std_map_del(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_MAP);
+	map_del(get_map(args[0]), args[1], ctx);
 	return make_none();
 }
 
@@ -5674,6 +5785,25 @@ static value_t std_map_iter(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+static value_t std_map_iteri(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_MAP);
+	typecheck(1, TYPE_FREF);
+	const map_t* map = get_map(args[0]);
+	const fref_t* fref = get_fref(args[1]);
+	
+	size_t index = 0;
+	for (size_t i = 0; i < map->cap; i++) {
+		const map_entry_t* entry = &map->entries[i];
+		if (entry->key.tag == TYPE_NONE) continue;
+		value_t args[] = {
+			make_number(index), entry->key, entry->value };
+		lur_call_function(ctx, fref, args, 3);
+		index++;
+	}
+	
+	return make_none();
+}
+
 static value_t std_map_get_or_default(
 	value_t* args, lur_t* ctx)
 {
@@ -5683,6 +5813,136 @@ static value_t std_map_get_or_default(
 	if (!map_get(map, args[1], &value, ctx))
 		return args[2];
 	return value;
+}
+
+lur_config_t lur_default_config(void);
+lur_t* lur_new(lur_config_t, int, char**);
+void lur_free(lur_t*);
+
+void* thread_spawn(void* ptr) {
+	lur_t* prev_ctx = (lur_t*)ptr;
+	lur_t* ctx = lur_new(prev_ctx->cfg, 0, NULL);
+	
+	if (prev_ctx->thread_args->len !=
+		prev_ctx->thread_fref->func->argc)
+		error(ctx, ERR_ARGC(
+			prev_ctx->thread_fref->func->name,
+			prev_ctx->thread_args->len,
+			prev_ctx->thread_fref->func->argc));
+	
+	*ctx->vm.sp++ = make_fref(prev_ctx->thread_fref);
+	for (size_t i = 0; i < prev_ctx->thread_args->len; i++)
+		*ctx->vm.sp++ = prev_ctx->thread_args->items[i];
+	
+	ctx->running = true;
+	prev_ctx->thread_retval = vm_launch(&ctx->vm,
+		make_fref(prev_ctx->thread_fref),
+		prev_ctx->thread_args->len,
+		true);
+	ctx->running = false;
+	
+//	lur_free(ctx); TODO: fix
+	return NULL;
+}
+
+static value_t std_thread_spawn(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_FREF);
+	typecheck(1, TYPE_ARRAY);
+
+	ctx->thread_fref = get_fref(args[0]);
+	ctx->thread_args = get_array(args[1]);
+	
+	thread_t* thread = NULL;
+	ssize_t thread_index = -1;
+	for (size_t i = 0; i < MAX_THREADS; i++) {
+		if (ctx->vm.threads[i].is_free) {
+			thread = &ctx->vm.threads[i];
+			thread_index = i;
+			break;
+		}
+	}
+	
+	if (thread_index == -1)
+		error(ctx, ERR_MAX_THREADS(MAX_THREADS));
+	
+	int result = pthread_create(
+		&thread->id, NULL, thread_spawn, (void*)ctx);
+	
+	if (result == -1)
+		error(ctx, ERR_THREAD_SPAWN_FAILED(result));
+	
+	thread->is_free = false;
+	return make_number(thread_index);
+}
+
+static value_t std_thread_join(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	size_t thread_index = (size_t)get_number(args[0]);
+	thread_t* thread = &ctx->vm.threads[thread_index];
+	pthread_join(thread->id, NULL);
+	thread->is_free = true;
+	return ctx->thread_retval;
+}
+
+static text_t* io_read(const text_t* path, lur_t* ctx) {
+	assert(path && ctx);
+	FILE* fp = fopen((const char*)path->buffer, "r");
+	if (!fp) error(ctx, ERR_READ_FAILED(path));
+	
+	fseek(fp, 0, SEEK_END);
+	size_t len = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	
+	text_t* text = text_new(NULL, len, ctx);
+	fread(text->buffer, 1, len, fp);
+	fclose(fp);
+	return text;
+}
+
+static text_t* io_read_stdin(lur_t* ctx) {
+	assert(ctx);
+	
+	char* line = NULL;
+	size_t len = 0;
+	if (getline(&line, &len, stdin) == -1) {
+		free(line);
+		error(ctx, ERR_READ_FAILED(text_lit("stdin", ctx)));
+	}
+	
+	text_t* text = text_new(
+		(const uint8_t*)line, strlen(line), ctx);
+	free(line);
+	return text;
+}
+
+static void io_write(
+	const text_t* path, const text_t* output, lur_t* ctx)
+{
+	assert(path && output && ctx);
+	FILE* fp = fopen((const char*)path->buffer, "w");
+	if (!fp) error(ctx, ERR_WRITE_FAILED(path));
+	fputs((char*)output->buffer, fp);
+	fclose(fp);
+}
+
+static void io_append(
+	const text_t* path, const text_t* output, lur_t* ctx)
+{
+	assert(path && output && ctx);
+	FILE* fp = fopen((const char*)path->buffer, "a");
+	if (!fp) error(ctx, ERR_WRITE_FAILED(path));
+	fputs((char*)output->buffer, fp);
+	fclose(fp);
+}
+
+static size_t io_file_size(const text_t* path, lur_t* ctx) {
+	assert(path && ctx);
+	FILE* fp = fopen((const char*)path->buffer, "r");
+	if (!fp) error(ctx, ERR_READ_FAILED(path));
+	fseek(fp, 0, SEEK_END);
+	size_t len = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	return len;
 }
 
 static value_t std_io_print(value_t* args, lur_t* ctx) {
@@ -5747,18 +6007,19 @@ static value_t std_io_list_dir(value_t* args, lur_t* ctx) {
 	const text_t* path = get_text(args[0]);
 	array_t* files = array_new(ctx);
 	
-	DIR *dir;
+	DIR* dir;
 	struct dirent* entry;
 	if ((dir = opendir((const char*)path->buffer)) != NULL) {
 		while ((entry = readdir(dir)) != NULL) {
-		 	text_t* file = text_lit(entry->d_name, ctx);
+		 	const text_t* file = text_lit(entry->d_name, ctx);
 		 	array_push(files, make_text(file), ctx);
 		}
 		closedir(dir);
 		return make_array(files);
 	}
 	
-	error(ctx, ERR_OPEN_FAILED(path));
+	error(ctx, ERR_OPEN_FAILED(
+		path, text_lit("list_dir", ctx)));
 	return make_none();
 }
 
@@ -5768,13 +6029,169 @@ static value_t std_io_del(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+static value_t std_socket_create(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	int type = (int)get_number(args[0]);
+	int handle = socket(AF_INET,
+		(type == 0) ? SOCK_STREAM : SOCK_DGRAM, 0);
+	
+	if (handle < 0)
+		error(ctx, ERR_SOCKET_CREATE(strerror(errno)));
+		
+	if (setsockopt(handle,
+		SOL_SOCKET,
+		SO_REUSEADDR,
+		&(int){1},
+		sizeof(int)) == -1)
+		error(ctx, ERR_SOCKET_CREATE(strerror(errno)));
+	
+	return make_number(handle);
+}
+
+static value_t std_socket_connect(value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_TEXT);
+	typecheck(2, TYPE_NUMBER);
+	
+	int handle = (int)get_number(args[0]);
+	const text_t* ip = get_text(args[1]);
+	int port = (int)get_number(args[2]);
+	
+	struct sockaddr_in addr;
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = inet_addr(
+		(const char*)ip->buffer);
+	addr.sin_port = htons(port);
+	
+	int result = connect(handle,
+		(struct sockaddr*)&addr, sizeof(addr));
+	if (result == -1)
+		error(ctx, ERR_SOCKET_CONNECT(ip, port,
+			strerror(errno)));
+	return make_number(result);
+}
+
+static value_t std_socket_bind(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_TEXT);
+	typecheck(2, TYPE_NUMBER);
+	
+	int handle = (int)get_number(args[0]);
+	const text_t* ip = get_text(args[1]);
+	int port = (int)get_number(args[2]);
+	
+	struct sockaddr_in addr;
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = inet_addr(
+		(const char*)ip->buffer);
+	addr.sin_port = htons(port);
+	
+	int result = bind(handle,
+		(struct sockaddr*)&addr, sizeof(addr));
+	if (result == -1)
+		error(ctx, ERR_SOCKET_BIND(ip, port, 
+			strerror(errno)));
+	return make_none();
+}
+
+static value_t std_socket_listen(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_NUMBER);
+	int handle = (int)get_number(args[0]);
+	double backlog = get_number(args[1]);
+	int result = listen(handle, backlog);
+	if (result == -1)
+		error(ctx, ERR_SOCKET_LISTEN_FAILED(
+			strerror(errno)));
+	return make_none();
+}
+ 
+static value_t std_socket_accept(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	int server = (int)get_number(args[0]);
+	
+	struct sockaddr_in addr;
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	addr.sin_port = htons(25565);
+
+	int result = accept(server, NULL, NULL);
+	if (result == -1)
+		error(ctx, ERR_SOCKET_ACCEPT_FAILED(
+			strerror(errno)));
+	return make_number(result);
+}
+
+static value_t std_socket_send(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_TEXT);
+	int handle = (int)get_number(args[0]);
+	const text_t* data = get_text(args[1]);
+	int result = send(handle, data->buffer, data->len + 1, 0);
+	if (result == -1)
+		error(ctx, ERR_SOCKET_SEND_FAILED(
+			strerror(errno)));
+	return make_none();
+}
+
+static value_t std_socket_recv(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	int handle = (int)get_number(args[0]);
+	
+	char* buffer[4096];
+	ptrdiff_t result = recv(handle, buffer, 4096, 0);
+	if (result == -1)
+		error(ctx, ERR_SOCKET_RECV_FAILED(
+			strerror(errno)));
+	return make_text(text_new(buffer, result - 1, ctx));
+}
+
+static value_t std_socket_close(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	int handle = (int)get_number(args[0]);
+	close(handle);
+	return make_none();
+}
+
 static value_t std_debug_assert(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_BOOL);
 	if (!get_bool(args[0])) error(ctx, ERR_ASSERTION);
 	return make_none();
 }
 
+static value_t std_debug_call_depth(
+	value_t* args, lur_t* ctx)
+{
+	return make_number(ctx->vm.ncalls);
+}
+
+static value_t std_debug_func_name(
+	value_t* args, lur_t* ctx)
+{
+	return make_text(ctx->vm.fp->func->name);
+}
+
+static value_t std_debug_line(
+	value_t* args, lur_t* ctx)
+{
+	return make_number(ctx->vm.fp->func->lines[
+		ctx->vm.fp->ip - ctx->vm.fp->func->ops]);
+}
+
 #undef typecheck
+
+static const map_t* lur_new_enum(
+	size_t len, const char* items[], lur_t* ctx)
+{
+	map_t* enum_ = map_new(ctx);
+	for (size_t i = 0; i < len; i++)
+		map_set(enum_,
+			make_text(text_lit(items[i], ctx)),
+			make_number(i),
+			ctx);
+	return enum_;
+}
 
 static void stdvar_add(
 	lur_t* ctx, const char* name, value_t value)
@@ -5845,25 +6262,36 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "to_text", 1, std_to_text);
 	stdfun_add(ctx, "repeat", 2, std_repeat);
 	stdfun_add(ctx, "while", 1, std_while);
-	stdfun_add(ctx, "call", 1, std_call);
 	stdfun_add(ctx, "range", 2, std_range);
 	stdfun_add(ctx, "range_inc", 2, std_range_inc);
 	stdfun_add(ctx, "default_sort", 2, std_default_sort);
 	stdfun_add(ctx, "enum", 1, std_enum);
-	stdfun_add(ctx, "timestamp", 0, std_timestamp);
 	
-	std_set_map(ctx, "sys");
+	std_set_map(ctx, "time");
+	stdfun_add(ctx, "now", 0, std_time_now);
+	stdfun_add(ctx, "year", 0, std_time_year);
+	stdfun_add(ctx, "month", 0, std_time_month);
+	stdfun_add(ctx, "day", 0, std_time_day);
+	stdfun_add(ctx, "hour", 0, std_time_hour);
+	stdfun_add(ctx, "minute", 0, std_time_minute);
+	stdfun_add(ctx, "second", 0, std_time_second);
+	stdfun_add(ctx, "timestamp", 0, std_time_timestamp);
+	stdfun_add(ctx, "clock", 0, std_time_clock);
+	stdfun_add(ctx, "sleep", 1, std_time_sleep);
+	std_set_map(ctx, NULL);
+	
+	std_set_map(ctx, "system");
 	stdvar_add(ctx, "VERSION",
 		make_text(text_lit(LUR_VERSION, ctx)));
 	stdvar_add(ctx, "PLATFORM",
-		make_text(text_lit(get_platform(), ctx)));
+		make_text(text_lit(system_get_platform(), ctx)));
 	stdvar_add(ctx, "COMPILER_VERSION",
 		make_text(text_lit(__VERSION__, ctx)));
 	stdvar_add(ctx, "BUILD_TIME",
 		make_text(text_lit(__TIMESTAMP__, ctx)));
-	stdfun_add(ctx, "cmd", 1, std_sys_cmd);
-	stdfun_add(ctx, "exit", 1, std_sys_exit);
-	stdfun_add(ctx, "clock", 0, std_sys_clock);
+	stdvar_add(ctx, "argv", make_array(ctx->argv));
+	stdfun_add(ctx, "cmd", 1, std_system_cmd);
+	stdfun_add(ctx, "exit", 1, std_system_exit);
 	std_set_map(ctx, NULL);
 	
 	std_set_map(ctx, "math");
@@ -5913,6 +6341,25 @@ void stdlib_load(lur_t* ctx) {
 	std_set_map(ctx, NULL);
 	
 	std_set_map(ctx, "vec");
+	array_t* x = array_new(ctx);
+	array_push(x, make_number(1.0), ctx);
+	array_push(x, make_number(0.0), ctx);
+	array_push(x, make_number(0.0), ctx);
+	stdvar_add(ctx, "X", make_array(x));
+	array_t* y = array_new(ctx);
+	array_push(y, make_number(0.0), ctx);
+	array_push(y, make_number(1.0), ctx);
+	array_push(y, make_number(0.0), ctx);
+	stdvar_add(ctx, "Y", make_array(y));
+	array_t* z = array_new(ctx);
+	array_push(z, make_number(0.0), ctx);
+	array_push(z, make_number(0.0), ctx);
+	array_push(z, make_number(1.0), ctx);
+	stdvar_add(ctx, "Z", make_array(z));
+	stdfun_add(ctx, "x", 1, std_vec_x);
+	stdfun_add(ctx, "y", 1, std_vec_y);
+	stdfun_add(ctx, "z", 1, std_vec_z);
+	stdfun_add(ctx, "w", 1, std_vec_w);
 	stdfun_add(ctx, "size", 1, std_vec_size);
 	stdfun_add(ctx, "norm", 1, std_vec_norm);
 	stdfun_add(ctx, "dot", 2, std_vec_dot);
@@ -5939,10 +6386,10 @@ void stdlib_load(lur_t* ctx) {
 		text_lit("\n", ctx)));
 	stdfun_add(ctx, "len", 1, std_text_len);
 	stdfun_add(ctx, "cmp", 2, std_text_cmp);
-	stdfun_add(ctx, "chars", 1, std_text_chars);
+	stdfun_add(ctx, "bytes", 1, std_text_bytes);
 	stdfun_add(ctx, "ascii", 1, std_text_ascii);
+	stdfun_add(ctx, "words", 2, std_text_words);
 	stdfun_add(ctx, "slice", 3, std_text_slice);
-	stdfun_add(ctx, "split", 2, std_text_split);
 	stdfun_add(ctx, "to_upper", 1, std_text_to_upper);
 	stdfun_add(ctx, "to_lower", 1, std_text_to_lower);
 	stdfun_add(ctx, "is_upper", 1, std_text_is_upper);
@@ -5960,46 +6407,47 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "edit_dist", 2, std_text_edit_dist);
 	std_set_map(ctx, NULL);
 	
-	std_set_map(ctx, "arr");
-	stdfun_add(ctx, "len", 1, std_arr_len);
-	stdfun_add(ctx, "get", 2, std_arr_get);
-	stdfun_add(ctx, "set", 3, std_arr_set);
-	stdfun_add(ctx, "insert", 3, std_arr_insert);
-	stdfun_add(ctx, "del", 2, std_arr_del);
-	stdfun_add(ctx, "pop", 1, std_arr_pop);
-	stdfun_add(ctx, "head", 1, std_arr_head);
-	stdfun_add(ctx, "tail", 1, std_arr_tail);
-	stdfun_add(ctx, "last", 1, std_arr_last);
-	stdfun_add(ctx, "fill", 2, std_arr_fill);
-	stdfun_add(ctx, "repeat", 2, std_arr_repeat);
-	stdfun_add(ctx, "rotate", 2, std_arr_rotate);
-	stdfun_add(ctx, "count", 2, std_arr_count);
-	stdfun_add(ctx, "contains", 2, std_arr_contains);
-	stdfun_add(ctx, "find", 3, std_arr_find);
-	stdfun_add(ctx, "iter", 2, std_arr_iter);
-	stdfun_add(ctx, "iteri", 2, std_arr_iteri);
-	stdfun_add(ctx, "map", 2, std_arr_map);
-	stdfun_add(ctx, "filter", 2, std_arr_filter);
-	stdfun_add(ctx, "fold", 3, std_arr_fold);
-	stdfun_add(ctx, "flat", 1, std_arr_flat);
-	stdfun_add(ctx, "dedup", 1, std_arr_dedup);
-	stdfun_add(ctx, "sum", 1, std_arr_sum);
-	stdfun_add(ctx, "average", 1, std_arr_average);
-	stdfun_add(ctx, "mean", 1, std_arr_mean);
-	stdfun_add(ctx, "any", 2, std_arr_any);
-	stdfun_add(ctx, "all", 2, std_arr_all);
-	stdfun_add(ctx, "sort", 1, std_arr_sort);
-	stdfun_add(ctx, "sort_by", 2, std_arr_sort_by);
-	stdfun_add(ctx, "swap", 3, std_arr_swap);
-	stdfun_add(ctx, "join", 1, std_arr_join);
-	stdfun_add(ctx, "zip", 1, std_arr_zip);
-	stdfun_add(ctx, "chunk", 2, std_arr_chunk);
+	std_set_map(ctx, "array");
+	stdfun_add(ctx, "len", 1, std_array_len);
+	stdfun_add(ctx, "get", 2, std_array_get);
+	stdfun_add(ctx, "set", 3, std_array_set);
+	stdfun_add(ctx, "insert", 3, std_array_insert);
+	stdfun_add(ctx, "del", 2, std_array_del);
+	stdfun_add(ctx, "pop", 1, std_array_pop);
+	stdfun_add(ctx, "head", 1, std_array_head);
+	stdfun_add(ctx, "tail", 1, std_array_tail);
+	stdfun_add(ctx, "last", 1, std_array_last);
+	stdfun_add(ctx, "fill", 2, std_array_fill);
+	stdfun_add(ctx, "repeat", 2, std_array_repeat);
+	stdfun_add(ctx, "rotate", 2, std_array_rotate);
+	stdfun_add(ctx, "count", 2, std_array_count);
+	stdfun_add(ctx, "contains", 2, std_array_contains);
+	stdfun_add(ctx, "find", 3, std_array_find);
+	stdfun_add(ctx, "iter", 2, std_array_iter);
+	stdfun_add(ctx, "iteri", 2, std_array_iteri);
+	stdfun_add(ctx, "map", 2, std_array_map);
+	stdfun_add(ctx, "filter", 2, std_array_filter);
+	stdfun_add(ctx, "fold", 3, std_array_fold);
+	stdfun_add(ctx, "flat", 1, std_array_flat);
+	stdfun_add(ctx, "dedup", 1, std_array_dedup);
+	stdfun_add(ctx, "sum", 1, std_array_sum);
+	stdfun_add(ctx, "average", 1, std_array_average);
+	stdfun_add(ctx, "mean", 1, std_array_mean);
+	stdfun_add(ctx, "any", 2, std_array_any);
+	stdfun_add(ctx, "all", 2, std_array_all);
+	stdfun_add(ctx, "sort", 1, std_array_sort);
+	stdfun_add(ctx, "sort_by", 2, std_array_sort_by);
+	stdfun_add(ctx, "swap", 3, std_array_swap);
+	stdfun_add(ctx, "join", 1, std_array_join);
+	stdfun_add(ctx, "zip", 1, std_array_zip);
+	stdfun_add(ctx, "chunk", 2, std_array_chunk);
 	std_set_map(ctx, NULL);
 	
 	std_set_map(ctx, "map");
 	stdfun_add(ctx, "len", 1, std_map_len);
 	stdfun_add(ctx, "get", 2, std_map_get);
 	stdfun_add(ctx, "set", 3, std_map_set);
+	stdfun_add(ctx, "del", 2, std_map_del);
 	stdfun_add(ctx, "has_key", 2, std_map_has_key);
 	stdfun_add(ctx, "has_value", 2, std_map_has_value);
 	stdfun_add(ctx, "keys", 1, std_map_keys);
@@ -6008,8 +6456,14 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "from_kv_pairs", 1,
 		std_map_from_kv_pairs);
 	stdfun_add(ctx, "iter", 2, std_map_iter);
+	stdfun_add(ctx, "iteri", 2, std_map_iteri);
 	stdfun_add(ctx, "get_or_default", 3,
 		std_map_get_or_default);
+	std_set_map(ctx, NULL);
+	
+	std_set_map(ctx, "thread");
+	stdfun_add(ctx, "spawn", 2, std_thread_spawn);
+	stdfun_add(ctx, "join", 1, std_thread_join);
 	std_set_map(ctx, NULL);
 	
 	std_set_map(ctx, "io");
@@ -6026,19 +6480,47 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "del", 1, std_io_del);
 	std_set_map(ctx, NULL);
 	
+	std_set_map(ctx, "socket");
+	stdvar_add(ctx, "LOCALHOST",
+		make_text(text_lit("127.0.0.1", ctx)));
+	const char* type[] = {"STREAM", "DGRAM"};
+	stdvar_add(ctx, "type",
+		make_map(lur_new_enum(2, type, ctx)));
+	stdfun_add(ctx, "create", 1, std_socket_create);
+	stdfun_add(ctx, "connect", 3, std_socket_connect);
+	stdfun_add(ctx, "bind", 3, std_socket_bind);
+	stdfun_add(ctx, "listen", 2, std_socket_listen);
+	stdfun_add(ctx, "accept", 1, std_socket_accept);
+	stdfun_add(ctx, "send", 2, std_socket_send);
+	stdfun_add(ctx, "recv", 1, std_socket_recv);
+	stdfun_add(ctx, "close", 1, std_socket_close);
+	std_set_map(ctx, NULL);
+	
 	std_set_map(ctx, "debug");
 	stdfun_add(ctx, "assert", 1, std_debug_assert);
+	stdfun_add(ctx, "call_depth", 0, std_debug_call_depth);
+	stdfun_add(ctx, "func_name", 0, std_debug_func_name);
+	stdfun_add(ctx, "line", 0, std_debug_line);
 	std_set_map(ctx, NULL);
 	
 	gc_resume(ctx);
 }
 
-lur_t* lur_new(void) {
+lur_config_t lur_default_config(void) {
+	lur_config_t cfg;
+	cfg.memory_limit = -1;
+	return cfg;
+}
+
+lur_t* lur_new(lur_config_t cfg, int argc, char** argv ) {
 	lur_t* ctx = mem_alloc(NULL, sizeof(lur_t));
 	if (setjmp(ctx->errjmp)) return NULL;
 	
+	ctx->cfg = cfg;
+	ctx->cur_vm = 0;
 	ctx->mem.bytes = sizeof(lur_t);
 	ctx->mem.total = ctx->mem.bytes;
+	ctx->mem.next_gc = FIRST_GC_LIMIT;
 	ctx->mem.objs = NULL;
 	ctx->mem.gc_pause = 0;
 	ctx->mem.marked = NULL;
@@ -6050,6 +6532,15 @@ lur_t* lur_new(void) {
 	ctx->interpreter = false;
 	ctx->std_map = NULL;
 	ctx->std_map_name = NULL;
+	
+	ctx->thread_fref = NULL;
+	ctx->thread_args = NULL;
+	
+	ctx->argv = array_new(ctx);
+	for (int i = 0; i < argc; i++)
+		array_push(ctx->argv,
+			make_text(text_lit(argv[i], ctx)),
+			ctx);
 	
 	vm_init(&ctx->vm, ctx);
 	stdlib_load(ctx);
@@ -6068,7 +6559,7 @@ void lur_free(lur_t* ctx) {
 		cur = next;
 	}
 	
-	free(ctx->mem.marked);
+	lur_gc_free(ctx->mem.marked);
 	
 	#if LUR_DEBUG_PRINT_MEM_STATS
 	lur_dprintf("memory leaked: %td bytes\n",
@@ -6101,7 +6592,7 @@ void lur_xstring(lur_t* ctx, const char* src) {
 	if (!ctx) return;
 	if (setjmp(ctx->errjmp)) return;
 	exec(ctx,
-		text_lit(src, ctx), text_lit("<src>", ctx));
+		text_lit(src, ctx), text_lit("[src]", ctx));
 }
 
 void lur_xfile(lur_t* ctx, const char* path) {
@@ -6123,7 +6614,8 @@ static void interpret(lur_t* ctx) {
 }
 
 int main(int argc, char* argv[]) {
-	lur_t* ctx = lur_new();
+	lur_config_t cfg = lur_default_config();
+	lur_t* ctx = lur_new(cfg, argc, argv);
 	if (argc == 2) lur_xfile(ctx, argv[1]);
 	else interpret(ctx);
 	
