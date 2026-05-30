@@ -1,70 +1,79 @@
-debug.assert: sys.VERSION = "lur 1.0"
+debug.assert: system.VERSION is "lur 1.0"
 
-let names() = do
-	let value = "whatever"
+comments() = do
+	-- single-line comment
 	
-	let name = value
-	let Name = value
-	let NAME = value
-	let name_123 = value
-	let Name_123 = value
-	let NAME_123 = value
-	
-	debug.assert: name = value
-	debug.assert: Name = value
-	debug.assert: NAME = value
-	debug.assert: name_123= value
-	debug.assert: Name_123 = value
-	debug.assert: NAME = value
+	--[ 
+		multi-line
+		comment
+	--]
 end
 
-let none_literal() = do
-	debug.assert: none = none
+names() = do
+	value = "whatever"
+	
+	name = value
+	Name = value
+	NAME = value
+	name_123 = value
+	Name_123 = value
+	NAME_123 = value
+	
+	debug.assert: name is value
+	debug.assert: Name is value
+	debug.assert: NAME is value
+	debug.assert: name_123 is value
+	debug.assert: Name_123 is value
+	debug.assert: NAME_123 is value
 end
 
-let bool_literal() = do
-	debug.assert: true = true
-	debug.assert: false = false
+none_literal() = do
+	debug.assert: none is none
 end
 
-let number_literal() = do
-	let whole = 314
-	let decimal = 3.14
-	
-	let underscore = 1_000_000
-	debug.assert: underscore = 1_000_000
-	
-	let hexadecimal = 0xff
-	debug.assert: hexadecimal = 255
-	
-	let binary = 0b0101
-	debug.assert: binary = 5
+bool_literal() = do
+	debug.assert: true is true
+	debug.assert: false is false
 end
 
-let text_literal() = do
-	let empty = ""
+number_literal() = do
+	whole = 314
+	decimal = 3.14
 	
-	debug.assert: "plain" = "plain"
-	debug.assert: "\\" = "\x5c"
-	debug.assert: "\"" = "\x22"
-	debug.assert: "\t" = "\x09"
-	debug.assert: "\n" = "\x0a"
-	debug.assert: "\r" = "\x0d"
-	debug.assert: "\0" = "\x00"
-	debug.assert: "A" = "\x41"
+	underscore = 1_000_000
+	debug.assert: underscore is 1000000
+	
+	hexadecimal = 0xff
+	debug.assert: hexadecimal is 255
+	
+	binary = 0b0101
+	debug.assert: binary is 5
 end
 
-let list_literal() = do
-	let empty = []
-	let numbers = [1, 4, 7]
-	let trailing_comma = [
+text_literal() = do
+	empty = ""
+	
+	debug.assert: "plain" is "plain"
+	debug.assert: "\\" is "\x5c"
+	debug.assert: "\"" is "\x22"
+	debug.assert: "\t" is "\x09"
+	debug.assert: "\n" is "\x0a"
+	debug.assert: "\r" is "\x0d"
+	debug.assert: "\0" is "\x00"
+	debug.assert: "A" is "\x41"
+end
+
+array_literal() = do
+	empty = []
+	numbers = [1, 4, 7]
+	trailing_comma = [
 		1, 2, 3,
 	]
 end
 
-let map_literal() = do
-	let empty = {}
-	let config = {
+map_literal() = do
+	empty = {}
+	config = {
 		"video" =>  {
 			"resx" => 1920,
 			"resy" => 1080,
@@ -115,21 +124,21 @@ let map_literal() = do
 			"time_of_day" => 3652.598,
 		},
 	}
-	let trailing_comma = {
+	trailing_comma = {
 		1 => "a", 2 => "b", 3 => "c",
 	}
 end
 
-let function_literal() = do
-	let normal() = do end
-	let no_block() = none
-	let args(a1, a2, a3) = none
-	let lambda = fun -> none
-	let lambda_args = (fun a1, a2, a3 -> none)
+function_literal() = do
+	normal() = do end
+	no_block() = none
+	args(a1, a2, a3) = a1 & a2 & a3
+	lambda = fun -> none
+	lambda_args = fun a1, a2, a3 -> a1 & a2 & a3
 end
 
-let equality() = do
-	let values = [
+equality() = do
+	values = [
 		none,
 		true,
 		333,
@@ -140,17 +149,17 @@ let equality() = do
 		fun a, b -> a + b,
 	]
 	
-	arr.iteri: values, (fun skip, value -> do
-		debug.assert: value = value
-		arr.iteri: values, (fun i, other -> if i != skip then
-			debug.assert: value != other)
-	end)
+	array.iteri: values, fun skip, value -> do
+		debug.assert: value is value
+		array.iteri: values, fun i, other -> if i != skip then
+			debug.assert: value != other
+	end
 end
 
-let comparison() = do
-	let lo = -100
-	let hi = 100
-	let same = 75
+comparison() = do
+	lo = -100
+	hi = 100
+	same = 75
 	debug.assert: lo < hi
 	debug.assert: lo <= hi
 	debug.assert: lo <= lo
@@ -161,291 +170,298 @@ let comparison() = do
 	debug.assert: same <= same
 end
 
-let boolean_ops() = do
-	debug.assert: true and true = true
-	debug.assert: true and false = false
-	debug.assert: true or false = true
-	debug.assert: false or false = false
+boolean_ops() = do
+	debug.assert: true and true is true
+	debug.assert: true and false is false
+	debug.assert: true or false is true
+	debug.assert: false or false is false
 	
-	let crash() = debug.assert: false
-	false and call: crash
-	true or call: crash
+	crash() = debug.assert: false
+	false and crash;
+	true or crash;
 	
-	debug.assert: not true = false
-	debug.assert: not false = true
+	debug.assert: not true is false
+	debug.assert: not false is true
 end
 
-let scalar_math() = do
-	debug.assert: 1 + 2 = 3
-	debug.assert: 8 - 5 = 3
-	debug.assert: 4 * 2 = 8
-	debug.assert: 2 ^ 8 = 256
-	debug.assert: 16 / 2 = 8
-	debug.assert: 16 % 14 = 2
-	debug.assert: -1 = 0 - 1
-	debug.assert: 1 + 3 - 5 * 7 / 8 - -10 = 9.625
+scalar_math() = do
+	debug.assert: 1 + 2 is 3
+	debug.assert: 8 - 5 is 3
+	debug.assert: 4 * 2 is 8
+	debug.assert: 2 ^ 8 is 256
+	debug.assert: 16 / 2 is 8
+	debug.assert: 16 % 14 is 2
+	debug.assert: -1 is 0 - 1
+	debug.assert: 1 + 3 - 5 * 7 / 8 - -10 is 9.625
 end
 
-let vector_math() = do
-	debug.assert: [1, 2, 3] + 10 = [11, 12, 13]
-	debug.assert: [1, 2, 3] + [9, 8, 7] = [10, 10, 10]
+vector_math() = do
+	debug.assert: [1, 2, 3] + 10 is [11, 12, 13]
+	debug.assert: [1, 2, 3] + [9, 8, 7] is [10, 10, 10]
 	
-	debug.assert: [1, 2, 3] - 2 = [-1, 0, 1]
-	debug.assert: [1, 2, 3] - [1, 2, 3] = [0, 0, 0]
+	debug.assert: [1, 2, 3] - 2 is [-1, 0, 1]
+	debug.assert: [1, 2, 3] - [1, 2, 3] is [0, 0, 0]
 
-	debug.assert: [1, 2, 3] * 10 = [10, 20, 30]
-	debug.assert: [1, 2, 3] * [10, 100, 1000] =
+	debug.assert: [1, 2, 3] * 10 is [10, 20, 30]
+	debug.assert: [1, 2, 3] * [10, 100, 1000] is
 		[10, 200, 3000]
 	
-	debug.assert: [1, 2, 3] ^ 2 = [1, 4, 9]
-	debug.assert: [1, 2, 3] ^ [4, 5, 6] = [1, 32, 729]
+	debug.assert: [1, 2, 3] ^ 2 is [1, 4, 9]
+	debug.assert: [1, 2, 3] ^ [4, 5, 6] is [1, 32, 729]
 	
-	debug.assert: [1, 2, 3] / 2 = [0.5, 1, 1.5]
-	debug.assert: [1, 2, 3] / [0.5, 0.5, 0.5] = [2, 4, 6]
+	debug.assert: [1, 2, 3] / 2 is [0.5, 1, 1.5]
+	debug.assert: [1, 2, 3] / [0.5, 0.5, 0.5] is [2, 4, 6]
 	
-	debug.assert: [1, 2, 3] % 2 = [1, 0, 1]
-	debug.assert: [1, 2, 3] % [0.75, 1.5, 2.25] =
+	debug.assert: [1, 2, 3] % 2 is [1, 0, 1]
+	debug.assert: [1, 2, 3] % [0.75, 1.5, 2.25] is
 		[0.25, 0.5, 0.75]
 end
 
-let invert() = do
-	debug.assert: -1 = 0 - 1
-	debug.assert: -"hello" = "olleh"
-	debug.assert: -[1, 2, 3] = [3, 2, 1]
-	debug.assert: -{1 => "a"} = {"a" => 1}
+invert() = do
+	debug.assert: -1 is 0 - 1
+	debug.assert: -"hello" is "olleh"
+	debug.assert: -[1, 2, 3] is [3, 2, 1]
+	debug.assert: -{1 => "a"} is {"a" => 1}
 end
 
-let assign() = do
-	let x = 0
+assign() = do
+	x = 0
 	
 	x <- 4
-	debug.assert: x = 4
+	debug.assert: x is 4
 	x += 1
-	debug.assert: x = 5
+	debug.assert: x is 5
 	x -= 2
-	debug.assert: x = 3
+	debug.assert: x is 3
 	x *= 10
-	debug.assert: x = 30
+	debug.assert: x is 30
 	x ^= 2
-	debug.assert: x = 900
+	debug.assert: x is 900
 	x /= 4
-	debug.assert: x = 225
+	debug.assert: x is 225
 	x %= 200
-	debug.assert: x = 25
+	debug.assert: x is 25
 	
-	let chain1 = 0
-	let chain2 = 0
-	let chain3 = 0
+	obj = {"x" => 0}
+	obj.x <- 4
+	debug.assert: obj.x is 4
+	obj.x += 1
+	debug.assert: obj.x is 5
+	obj.x -= 2
+	debug.assert: obj.x is 3
+	obj.x *= 10
+	debug.assert: obj.x is 30
+	obj.x ^= 2
+	debug.assert: obj.x is 900
+	obj.x /= 4
+	debug.assert: obj.x is 225
+	obj.x %= 200
+	debug.assert: obj.x is 25
+	
+	chain1 = 0
+	chain2 = 0
+	chain3 = 0
 	chain1 <- chain2 <- chain3 <- 7.5
-	debug.assert: chain1 = 7.5
-	debug.assert: chain2 = 7.5
-	debug.assert: chain3 = 7.5
+	debug.assert: chain1 is 7.5
+	debug.assert: chain2 is 7.5
+	debug.assert: chain3 is 7.5
 end
 
-let concat() = do
-	debug.assert: "Hello " & "World" = "Hello World"
-	debug.assert: [1, 2] & 3 = [1, 2, 3]
-	debug.assert: 1 & [2, 3] = [1, 2, 3]
-	debug.assert: [1, 2] & [3] = [1, 2, 3]
-	debug.assert: [1] & [2, 3] = [1, 2, 3]
-	debug.assert: {1 => "a"} & {2 => "b"} = {1 => "a", 2 => "b"}
+concat() = do
+	debug.assert: "Hello " & "World" is "Hello World"
+	debug.assert: [1, 2] & 3 is [1, 2, 3]
+	debug.assert: 1 & [2, 3] is [1, 2, 3]
+	debug.assert: [1, 2] & [3] is [1, 2, 3]
+	debug.assert: [1] & [2, 3] is [1, 2, 3]
+	debug.assert: {1 => "a"} & {2 => "b"} is {1 => "a", 2 => "b"}
 end
 
-let blocks() = do
-	let empty = do end
-	debug.assert: empty = none
+blocks() = do
+	empty = do end
+	debug.assert: empty is none
 	
-	let value = do 1 end
-	debug.assert: value = 1
+	value = do 1 end
+	debug.assert: value is 1
 	
-	let variable = do
-		let x = 5
+	variable = do
+		x = 5
 		x
 	end
-	debug.assert: variable = 5
+	debug.assert: variable is 5
 end
 
-let functions() = do
-	let empty() = do end
-	debug.assert: (call: empty) = none
+functions() = do
+	empty() = do end
+	debug.assert: (empty;) is none
 	
-	let value() = 1
-	debug.assert: (call: value) = 1
+	value() = 1
+	debug.assert: (value;) is 1
 	
-	let rec(i) = if i < 3 then rec: i + 1 else i
-	debug.assert: (rec: 0) = 3
+	rec(i) = if i < 3 then rec: i + 1 else i
+	debug.assert: (rec: 0) is 3
 	
-	let early_return() = do
-		let local = 3
+	early_return() = do
+		local = 3
 		if true then return 1
 		2
 	end
-	debug.assert: (call: early_return) = 1
+	debug.assert: (early_return;) is 1
 
-	let value = 1
-	let a() = do
-		debug.assert: value = 1
+	value = 1
+	a() = do
+		debug.assert: value is 1
 		value <- 2
 	end
-	call: a
-	debug.assert: value = 2
+	a;
+	debug.assert: value is 2
 	
-	let a() = do
-		let value = 1
-		let b() = do
+	a() = do
+		value = 1
+		b() = do
 			value <- 2
 		end
-		call: b
+		b;
 		value
 	end
-	debug.assert: (call: a) = 2
+	debug.assert: (a;) is 2
 	
-	let a() = do
-		let value = 3
+	a() = do
+		value = 3
 		value
 	end
-	debug.assert: (call: a) = 3
+	debug.assert: (a;) is 3
 end
 
-let dot() = do
-	let map = {"abc" => 123}
-	debug.assert: map.abc = 123
+dot() = do
+	map = {"abc" => 123}
+	debug.assert: map.abc is 123
 	map.abc <- 456
-	debug.assert: map.abc = 456
-	
-	let vec = [1, 2, 3, 4]
-	debug.assert: vec.x = 1
-	debug.assert: vec.y = 2
-	debug.assert: vec.z = 3
-	debug.assert: vec.w = 4
-	
-	vec.x <- 4
-	vec.y <- 3
-	vec.z <- 2
-	vec.w <- 1
-	
-	debug.assert: vec = [4, 3, 2, 1]
+	debug.assert: map.abc is 456
 end
 
-let arrow() = do
-	let map = {
+arrow() = do
+	map = {
 		"xyz" => 456,
-		"abc" => (fun self -> debug.assert: self.xyz = 456),
-		"rst" => (fun self, x, y -> debug.assert: x + y = 5),
+		"abc" => (fun self -> debug.assert: self.xyz is 456),
+		"rst" => (fun self, x, y -> debug.assert: x + y is 5),
 	}
 	map->abc()
 	map->rst(2, 3)
 end
 
-let branches() = do
-	let value = if 1 = 1 then "A" else "B"
-	debug.assert: value = "A"
+branches() = do
+	value = if 1 is 1 then "A" else "B"
+	debug.assert: value is "A"
 	
-	let value = if 1 = 0 then "A" else "B"
-	debug.assert: value = "B"
+	value = if 1 is 0 then "A" else "B"
+	debug.assert: value is "B"
 	
-	let value = if 1 = 0 then "A"
-	debug.assert: value = none
+	value = if 1 is 0 then "A"
+	debug.assert: value is none
 	
-	let value = if 1 = 2 then "A"
-		else if 1 = 1 then "B"
-		else if 1 = 0 then "C"
-	debug.assert: value = "B"
+	value = if 1 is 2 then "A"
+		else if 1 is 1 then "B"
+		else if 1 is 0 then "C"
+	debug.assert: value is "B"
 end
 
-let base_lib() = do
-	debug.assert: (type_of: none) = "None"
-	debug.assert: (type_of: true) = "Bool"
-	debug.assert: (type_of: 333) = "Number"
-	debug.assert: (type_of: "hey") = "Text"
-	debug.assert: (type_of: ["hi"]) = "Array"
-	debug.assert: (type_of: {"a" => "b"}) = "Map"
-	debug.assert: (type_of: io.print_ln) = "Function"
-	debug.assert: (type_of: (fun a, b -> a + b)) = "Function"
+base_lib() = do
+	debug.assert: (type_of: none) is "None"
+	debug.assert: (type_of: true) is "Bool"
+	debug.assert: (type_of: 333) is "Number"
+	debug.assert: (type_of: "hey") is "Text"
+	debug.assert: (type_of: ["hi"]) is "Array"
+	debug.assert: (type_of: {"a" => "b"}) is "Map"
+	debug.assert: (type_of: io.print_ln) is "Function"
+	debug.assert: (type_of: fun a, b -> a + b) is "Function"
 
-	debug.assert: (to_number: none) = 0
-	debug.assert: (to_number: false) = 0
-	debug.assert: (to_number: true) = 1
-	debug.assert: (to_number: "5") = 5
-	debug.assert: (to_number: "$") = 0
-	--debug.assert: (to_number: [1, "23"]) = 123
+	debug.assert: (to_number: none) is 0
+	debug.assert: (to_number: false) is 0
+	debug.assert: (to_number: true) is 1
+	debug.assert: (to_number: "5") is 5
+	debug.assert: (to_number: "$") is 0
+	debug.assert: (to_number: [1, "23"]) is 123
 	
-	debug.assert: (to_text: none) = "none"
-	debug.assert: (to_text: true) = "true"
-	debug.assert: (to_text: false) = "false"
-	debug.assert: (to_text: 333) = "333.000000"
-	debug.assert: (to_text: "hey") = "hey"
-	debug.assert: (to_text: ["hi"]) = "[\"hi\"]"
-	debug.assert: (to_text: {"a" => "b"}) = "{\"a\" => \"b\"}"
-	debug.assert: (to_text: io.print_ln) = "print_ln(1)"
-	debug.assert: (to_text: (fun a, b -> a + b)) =
+	debug.assert: (to_text: none) is "none"
+	debug.assert: (to_text: true) is "true"
+	debug.assert: (to_text: false) is "false"
+	debug.assert: (to_text: 333) is "333"
+	debug.assert: (to_text: "hey") is "hey"
+	debug.assert: (to_text: ["hi"]) is "[\"hi\"]"
+	debug.assert: (to_text: {"a" => "b"}) is "{\"a\" => \"b\"}"
+	debug.assert: (to_text: io.print_ln) is "print_ln(1)"
+	debug.assert: (to_text: fun a, b -> a + b) is
 		"testbench.lur/base_lib/?(2)"
 	
-	let nums = []
-	repeat: 3, (fun i -> nums &= i)
-	debug.assert: nums = [0, 1, 2]
+	nums = []
+	repeat: 3, fun i -> nums &= i
+	debug.assert: nums is [0, 1, 2]
 	
-	let nums = []
-	let index = 0
-	while: (fun -> do
+	nums = []
+	index = 0
+	while: fun -> do
 		nums &= index
 		index += 1
 		index < 3
-	end)
-	debug.assert: nums = [0, 1, 2]
+	end
+	debug.assert: nums is [0, 1, 2]
 	
-	let called = false
-	let function() = called <- true
-	call: function
-	debug.assert: called
+	debug.assert: (range: 0, 3) is [0, 1, 2]
+	debug.assert: (range: 0, -3) is [0, -1, -2]
+	debug.assert: (range_inc: 0, 3) is [0, 1, 2, 3]
+	debug.assert: (range_inc: 0, -3) is [0, -1, -2, -3]
 	
-	debug.assert: (range: 0, 3) = [0, 1, 2]
-	debug.assert: (range: 0, -3) = [0, -1, -2]
-	debug.assert: (range_inc: 0, 3) = [0, 1, 2, 3]
-	debug.assert: (range_inc: 0, -3) = [0, -1, -2, -3]
+	day = enum: [
+		"Monday",
+		"Tuesday",
+		"Wednesday",
+		"Thursday",
+		"Friday",
+		"Saturday", 
+		"Sunday",
+	]
+	debug.assert: day.Monday is 0
+	debug.assert: day.Tuesday is 1
+	debug.assert: day.Wednesday is 2
+	debug.assert: day.Thursday is 3
+	debug.assert: day.Friday is 4
+	debug.assert: day.Saturday is 5
+	debug.assert: day.Sunday is 6
 end
 
-let system_lib() = do
-
+system_lib() = do
 end
 
-let math_lib() = do
+math_lib() = do
 	debug.assert: (math.eqf: math.PI,
 		3.14159265358979323846264338327950288,
 		0.00001)
 	debug.assert: (math.eqf: math.E,
 		2.71828182845904523536028747135266250,
 		0.00001)
-	debug.assert: (math.bit_shl: 16, 8) = 4096
-	debug.assert: (math.bit_shr: 4096, 8) = 16
-	debug.assert: (math.bit_and: 24, 22) = 16
-	debug.assert: (math.bit_or: 23, 48) = 55
-	debug.assert: (math.bit_xor: 40, 41) = 1
-	debug.assert: (math.bit_not: 60) = -61
-	
-	debug.assert: (math.log: 64, 8) = 2
-	debug.assert: (math.sqrt: 4) = 2 and
-		(math.squared: 2) = 4
-	debug.assert: (math.abs: -1) = 1 and (math.abs: 1) = 1
-	
-	debug.assert: (math.min: 4, 5) = 4
-	debug.assert: (math.max: 4, 5) = 5
-	
-	debug.assert: (math.clip: 3, 4, 5) = 4
-	debug.assert: (math.clip: 6, 4, 5) = 5
-	debug.assert: (math.clip: 4.5, 4, 5) = 4.5
-	
-	debug.assert: (math.lerp: 0.25, -10, 10) = -5
-	debug.assert: (math.lerp: 0.5, -10, 10) = 0
-	debug.assert: (math.lerp: 0.75, -10, 10) = 5
-	
-	debug.assert: (math.floor: 3.9) = 3
-	debug.assert: (math.ceil: 2.9) = 3
-	
-	debug.assert: (math.round: 3.45) = 3
-	debug.assert: (math.round: 3.55) = 4
-	debug.assert: (math.round: 3.5) = 4
-	
+	debug.assert: (math.bit_shl: 16, 8) is 4096
+	debug.assert: (math.bit_shr: 4096, 8) is 16
+	debug.assert: (math.bit_and: 24, 22) is 16
+	debug.assert: (math.bit_or: 23, 48) is 55
+	debug.assert: (math.bit_xor: 40, 41) is 1
+	debug.assert: (math.bit_not: 60) is -61
+	debug.assert: (math.log: 64, 8) is 2
+	debug.assert: (math.sqrt: 4) is 2 and
+		(math.squared: 2) is 4
+	debug.assert: (math.abs: -1) is 1 and (math.abs: 1) is 1
+	debug.assert: (math.min: 4, 5) is 4
+	debug.assert: (math.max: 4, 5) is 5
+	debug.assert: (math.clip: 3, 4, 5) is 4
+	debug.assert: (math.clip: 6, 4, 5) is 5
+	debug.assert: (math.clip: 4.5, 4, 5) is 4.5
+	debug.assert: (math.lerp: 0.25, -10, 10) is -5
+	debug.assert: (math.lerp: 0.5, -10, 10) is 0
+	debug.assert: (math.lerp: 0.75, -10, 10) is 5
+	debug.assert: (math.floor: 3.9) is 3
+	debug.assert: (math.ceil: 2.9) is 3
+	debug.assert: (math.round: 3.45) is 3
+	debug.assert: (math.round: 3.55) is 4
+	debug.assert: (math.round: 3.5) is 4
 	debug.assert: (math.eqf: (math.rad: 45), 0.7853, 0.001)
 	debug.assert: (math.eqf: (math.deg: 1), 57.2957, 0.001)
 	debug.assert: (math.eqf: (math.sin: 30), -0.988, 0.001)
@@ -465,246 +481,303 @@ let math_lib() = do
 		(math.eqf: (math.acosh: 10), 2.9932, 0.001)
 	debug.assert:
 		(math.eqf: (math.atanh: 0.5), 0.5493, 0.001)
-	
 	debug.assert: (math.is_even: 2) and not
 		(math.is_even: 3)
 	debug.assert: (math.is_odd: 3) and not (math.is_odd: 2)
-	
-	debug.assert: (math.hex: 0xff) = "0xff"
-	debug.assert: (math.bin: 0b11) = "0b11"
+	debug.assert: (math.is_prime: 7) and not
+		(math.is_prime: 6)
+	debug.assert: (math.hex: 0xff) is "0xff"
+	debug.assert: (math.bin: 0b11) is "0b11"
+	debug.assert: (math.hex: math.hash: ["Hello", "XYZ"]) is
+		"0x8380b4fa"
 end
 
-let vec_lib() = do
-	debug.assert: (vec.size: [3, 0, 0]) = 3
-	debug.assert: (vec.norm: [3, 0, 0]) = [1, 0, 0]
+vec_lib() = do
+	v = [1, 2, 3, 4]
+	debug.assert: (vec.x: v) is 1
+	debug.assert: (vec.y: v) is 2
+	debug.assert: (vec.z: v) is 3
+	debug.assert: (vec.w: v) is 4
+
+	debug.assert: (vec.size: [3, 0, 0]) is 3
+	debug.assert: (vec.norm: [3, 0, 0]) is [1, 0, 0]
 	
-	let v1 = [-1, 0, 0]
-	let v2 = [0.8, 0, 0]
+	v1 = [-1, 0, 0]
+	v2 = [0.8, 0, 0]
 	debug.assert: (math.eqf: (vec.dot: v1, v2), -0.8, 0.001)
 	
-	let v1 = [3, 5, 4]
-	let v2 = [2, 7, 5]
-	debug.assert: (vec.cross: v1, v2) = [-3, -7, 11]
+	v1 = [3, 5, 4]
+	v2 = [2, 7, 5]
+	debug.assert: (vec.cross: v1, v2) is [-3, -7, 11]
 end
 
-let rand_lib() = do
+rand_lib() = do
 	rand.seed: 45678
-	debug.assert: (math.floor: (rand.number: 1, 10)) = 5
-	debug.assert: (rand.text: 5, text.LETTERS) = "yvjou"
-	debug.assert: (rand.item: [1, 2, 3]) = 1
+	debug.assert: (math.floor: (rand.number: 1, 10)) is 5
+	debug.assert: (rand.text: 5, text.LETTERS) is "yvjou"
+	debug.assert: (rand.item: [1, 2, 3]) is 1
 end
 
-let text_lib() = do
-	debug.assert: text.LETTERS =
+text_lib() = do
+	debug.assert: text.LETTERS is
 		"abcdefghijklmnopqrstuvwxyz"
-	debug.assert: text.DIGITS = "0123456789"
-	debug.assert: text.PUNCTUATION =
+	debug.assert: text.DIGITS is "0123456789"
+	debug.assert: text.PUNCTUATION is
 		"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-	debug.assert: text.WHITESPACE = " \t\n\r"
-	debug.assert: (text.len: "three") = 5
-	debug.assert: (text.cmp: "Adam", "Benson") = "Adam"
-	debug.assert: (text.chars: "abc") = ["a", "b", "c"]
-	debug.assert: (text.ascii: "abc") = [97, 98, 99]
-	debug.assert: (text.slice: "accident", 3, 5) = "id"
-	debug.assert: (text.slice: "accident", -5, -3) = "id"
-	debug.assert: (text.split: "abc 123", " ") = ["abc", "123"]
-	debug.assert: (text.to_upper: "hi") = "HI"
-	debug.assert: (text.to_lower: "HI") = "hi"
+	debug.assert: text.WHITESPACE is " \t\n\r"
+	debug.assert: (text.len: "three") is 5
+	debug.assert: (text.cmp: "Adam", "Benson") is "Adam"
+	debug.assert: (text.bytes: "abc") is ["a", "b", "c"]
+	debug.assert: (text.ascii: "abc") is [97, 98, 99]
+	debug.assert: (text.words: "abc 123", " ") is ["abc", "123"]
+	debug.assert: (text.slice: "accident", 3, 5) is "id"
+	debug.assert: (text.slice: "accident", -5, -3) is "id"
+	debug.assert: (text.to_upper: "hi") is "HI"
+	debug.assert: (text.to_lower: "HI") is "hi"
 	debug.assert: (text.is_upper: "A") and not
 		(text.is_upper: "a")
 	debug.assert: (text.is_lower: "a") and not
 		(text.is_lower: "A")
 	debug.assert: (text.starts_with: "123", "1")
 	debug.assert: (text.ends_with: "123", "3")
-	debug.assert: (text.trim_left: " hi") = "hi"
-	debug.assert: (text.trim_right: "hi ") = "hi"
-	debug.assert: (text.trim: " hi ") = "hi"
-	debug.assert: (text.left_pad: "456", 6, "%") = "%%%456"
-	debug.assert: (text.right_pad: "327", 6 ,":") = "327:::"
-	debug.assert: (text.pad: "48", 6, ".") = "..48.."
-	debug.assert: (text.edit_dist: "golden", "ffolden") = 13
-	debug.assert: (text.find: "silver gold", "gold", 0) = 7
+	debug.assert: (text.trim_left: " hi") is "hi"
+	debug.assert: (text.trim_right: "hi ") is "hi"
+	debug.assert: (text.trim: " hi ") is "hi"
+	debug.assert: (text.left_pad: "456", 6, "%") is "%%%456"
+	debug.assert: (text.right_pad: "327", 6 ,":") is "327:::"
+	debug.assert: (text.pad: "48", 6, ".") is "..48.."
+	debug.assert: (text.edit_dist: "golden", "ffolden") is 13
+	debug.assert: (text.find: "silver gold", "gold", 0) is 7
 	debug.assert: (text.replace_all: 
-		"silver gold silver", "silver", "bronze") =
+		"silver gold silver", "silver", "bronze") is
 		"bronze gold bronze"
 end
 
-let list_lib() = do
-	let ls = [1, 2]
-	debug.assert: (arr.len: ls) = 2
+array_lib() = do
+	ls = [1, 2]
+	debug.assert: (array.len: ls) is 2
 	
-	debug.assert: (arr.get: ls, 0) = 1
-	debug.assert: (arr.get: ls, -1) = 2
-	arr.set: ls, 0, 3 
-	arr.set: ls, -1, 4
-	debug.assert: (arr.get: ls, 0) = 3
-	debug.assert: (arr.get: ls, -1) = 4
+	debug.assert: (array.get: ls, 0) is 1
+	debug.assert: (array.get: ls, -1) is 2
+	array.set: ls, 0, 3 
+	array.set: ls, -1, 4
+	debug.assert: (array.get: ls, 0) is 3
+	debug.assert: (array.get: ls, -1) is 4
 	
-	let empty = []
-	arr.insert: empty, 0, 1
-	debug.assert: empty = [1]
+	empty = []
+	array.insert: empty, 0, 1
+	debug.assert: empty is [1]
 	
-	let ls = [1, 3]
+	ls = [1, 3]
 	
-	arr.insert: ls, 1, 2
-	arr.insert: ls, -1, 4
-	debug.assert: ls = [1, 2, 3, 4]
+	array.insert: ls, 1, 2
+	array.insert: ls, -1, 4
+	debug.assert: ls is [1, 2, 3, 4]
 	
-	arr.del: ls, 0
-	arr.del: ls, -1
-	debug.assert: ls = [2, 3]
+	array.del: ls, 0
+	array.del: ls, -1
+	debug.assert: ls is [2, 3]
 	
-	let value = arr.pop: ls
-	debug.assert: value = 3 and ls = [2]
+	value = array.pop: ls
+	debug.assert: value is 3 and ls is [2]
 	
-	let x = [1, 2, 3, 4, 5]
-	debug.assert: (arr.head: x) = 1
-	debug.assert: (arr.tail: x) = [2, 3, 4, 5]
-	debug.assert: (arr.last: x) = 5
+	x = [1, 2, 3, 4, 5]
+	debug.assert: (array.head: x) is 1
+	debug.assert: (array.tail: x) is [2, 3, 4, 5]
+	debug.assert: (array.last: x) is 5
 	
-	let init = arr.fill: 4, (fun _ -> 5)
-	debug.assert: init = [5, 5, 5, 5]
+	init = array.fill: 4, fun _ -> 5
+	debug.assert: init is [5, 5, 5, 5]
 	
-	let init2 = arr.fill: 4, (fun i -> i + 1)
-	debug.assert: init2 = [1, 2, 3, 4]
+	init2 = array.fill: 4, fun i -> i + 1
+	debug.assert: init2 is [1, 2, 3, 4]
 	
-	let rep = arr.repeat: [0, 1], 4
-	debug.assert: rep = [0, 1, 0, 1, 0, 1, 0, 1]
+	rep = array.repeat: [0, 1], 4
+	debug.assert: rep is [0, 1, 0, 1, 0, 1, 0, 1]
 	
-	let rot = [1, 2, 3]
-	debug.assert: (arr.rotate: rot, -1) = [2, 3, 1]
-	debug.assert: (arr.rotate: rot, 1) = [3, 1, 2]
+	rot = [1, 2, 3]
+	debug.assert: (array.rotate: rot, -1) is [2, 3, 1]
+	debug.assert: (array.rotate: rot, 1) is [3, 1, 2]
 	
-	debug.assert: (arr.count: [0, 1, 1, 0, 1, 1, 0, 0], 1) = 4
+	debug.assert: (array.count: [0, 1, 1, 0, 1, 1, 0, 0], 1) is 4
 	
-	let ls = [1, 2]
-	debug.assert: arr.contains: ls, 1
-	debug.assert: not arr.contains: ls, 3
+	ls = [1, 2]
+	debug.assert: array.contains: ls, 1
+	debug.assert: not array.contains: ls, 3
 	
-	debug.assert: (arr.find: [1, 2, 3], 2, 0) = 1
-	debug.assert: (arr.find: [1, 2, 3], 2, 2) = none
+	debug.assert: (array.find: [1, 2, 3], 2, 0) is 1
+	debug.assert: (array.find: [1, 2, 3], 2, 2) is none
 	
-	let nums = [1, 2, 3]
-	let total = 0
-	arr.iter: nums, (fun num -> total += num)
-	debug.assert: total = 6
+	nums = [1, 2, 3]
+	total = 0
+	array.iter: nums, fun num -> total += num
+	debug.assert: total is 6
 	
-	let nums = [1, 2, 3]
-	arr.iteri: nums, (fun i, num -> do
-		debug.assert: i = num - 1
-		debug.assert: (arr.get: nums, i) = num
-	end)
+	inds = [0, 1, 2]
+	nums = [1, 2, 3]
+	array.iteri: nums, fun i, num -> do
+		debug.assert: i is num - 1
+		debug.assert: (array.get: nums, i) is num
+		debug.assert: (array.get: inds, i) is i
+	end
 	
-	debug.assert: (arr.map: [1, 2, 3], math.squared) =
+	debug.assert: (array.map: [1, 2, 3], math.squared) is
 		[1, 4, 9]
-	debug.assert: (arr.filter: [1, 2, 3], math.is_even) = [2]
-	debug.assert: (arr.fold: [1, 2, 3], 1, (fun a, b -> a + b)) =
+	debug.assert: (array.filter: [1, 2, 3], math.is_even) is [2]
+	debug.assert: (array.fold: [1, 2, 3], 1, fun a, b -> a + b) is
 		7
-	debug.assert: (arr.flat: [1, [2], [3, [4]]]) = [1, 2, 3, 4]
-	debug.assert: (arr.dedup: [1, 1, 1, 0]) = [1, 0]
-	debug.assert: (arr.sum: [1, 2, 3]) = 6
-	debug.assert: (arr.average: [1, 2, 3]) = 2
+	debug.assert: (array.flat: [1, [2], [3, [4]]]) is [1, 2, 3, 4]
+	debug.assert: (array.dedup: [1, 1, 1, 0]) is [1, 0]
+	debug.assert: (array.sum: [1, 2, 3]) is 6
+	debug.assert: (array.average: [1, 2, 3]) is 2
 	
-	let a = [10, 2, 30]
-	debug.assert: (arr.mean: a) = 2
+	a = [10, 2, 30]
+	debug.assert: (array.mean: a) is 2
 	
-	let b = [10, 2, 3, 40]
-	debug.assert: (arr.mean: b) = (2 + 3) / 2
+	b = [10, 2, 3, 40]
+	debug.assert: (array.mean: b) is (2 + 3) / 2
 	
-	debug.assert: arr.any: [4, 5, 6], (fun x -> x > 5)
-	debug.assert: not arr.any: [4, 5, 6], (fun x -> x > 6)
-	debug.assert: arr.all: [1, 1, 1], (fun x -> x = 1)
-	debug.assert: not arr.all: [1, 0, 1], (fun x -> x = 1)
+	debug.assert: array.any: [4, 5, 6], fun x -> x > 5
+	debug.assert: not array.any: [4, 5, 6], fun x -> x > 6
+	debug.assert: array.all: [1, 1, 1], fun x -> x is 1
+	debug.assert: not array.all: [1, 0, 1], fun x -> x is 1
 	
-	debug.assert: (arr.sort: []) = []
-	debug.assert: (arr.sort: [1]) = [1]
-	debug.assert: (arr.sort: [3, 2, 1]) = [1, 2, 3]
-	debug.assert: (arr.sort: ["James", "Aqua"]) = 
+	debug.assert: (array.sort: []) is []
+	debug.assert: (array.sort: [1]) is [1]
+	debug.assert: (array.sort: [3, 2, 1]) is [1, 2, 3]
+	debug.assert: (array.sort: ["James", "Aqua"]) is 
 		["Aqua", "James"]
 		
-	let rev_me = [1, 2, 3]
-	let rev_sorter(a, b) = b
-	debug.assert: (arr.sort_by: rev_me, rev_sorter) =
+	rev_me = [1, 2, 3]
+	rev_sorter(a, b) = b
+	debug.assert: (array.sort_by: rev_me, rev_sorter) is
 		[3, 2, 1]
 	
-	debug.assert: (arr.swap: [1, 2], 0, 1) = [2, 1]
-	debug.assert: (arr.swap: [1, 2], -1, -2) = [2, 1]
+	debug.assert: (array.swap: [1, 2], 0, 1) is [2, 1]
+	debug.assert: (array.swap: [1, 2], -1, -2) is [2, 1]
 	
-	debug.assert: (arr.join: []) = ""
-	debug.assert: (arr.join: ["a+", "b+", "c"]) = "a+b+c"
+	debug.assert: (array.join: []) is ""
+	debug.assert: (array.join: ["a+", "b+", "c"]) is "a+b+c"
 	
-	let a = [1, 4, 7, 9]
-	let b = [2, 5, 8]
-	let c = [3, 6]
-	debug.assert: (arr.zip: [a, b, c]) =
+	a = [1, 4, 7, 9]
+	b = [2, 5, 8]
+	c = [3, 6]
+	debug.assert: (array.zip: [a, b, c]) is
 		[1, 2, 3, 4, 5, 6, 7, 8, 9]
 	
-	let vertices = [
+	vertices = [
 		-0.5, 0.5, 0.0,
 		0.5, 0.5, 0.0,
 		-0.5, -0.5, 0.0
 	]
 	
-	let chunks = arr.chunk: vertices, 3
-	debug.assert: (arr.get: chunks, 0) = [-0.5, 0.5, 0.0]
-	debug.assert: (arr.get: chunks, 1) = [0.5, 0.5, 0.0]
-	debug.assert: (arr.get: chunks, 2) = [-0.5, -0.5, 0.0]
-	debug.assert: (arr.chunk: [], 1) = []
+	chunks = array.chunk: vertices, 3
+	debug.assert: (array.get: chunks, 0) is [-0.5, 0.5, 0.0]
+	debug.assert: (array.get: chunks, 1) is [0.5, 0.5, 0.0]
+	debug.assert: (array.get: chunks, 2) is [-0.5, -0.5, 0.0]
+	debug.assert: (array.chunk: [], 1) is []
 end
 
-let map_lib() = do
-	let example = {123 => "abc"}
-	debug.assert: (map.len: example) = 1
+map_lib() = do
+	example = {123 => "abc"}
+	debug.assert: (map.len: example) is 1
 	
-	debug.assert: (map.get: example, 123) = "abc"
+	debug.assert: (map.get: example, 123) is "abc"
 	map.set: example, 123, "xyz"
-	debug.assert: (map.get: example, 123) = "xyz"
+	debug.assert: (map.get: example, 123) is "xyz"
 	
-	let test = {1 => "a", 2 => "b", 3 => "c"}
+	clear_me = {123 => "456", 789 => "123"}
+	map.del: clear_me, 123
+	map.del: clear_me, 789
+	debug.assert: (map.len: clear_me) is 0
+	
+	test = {1 => "a", 2 => "b", 3 => "c"}
 	debug.assert: (map.has_key: test, 1)
 	debug.assert: (map.has_value: test, "a")
-	debug.assert: (map.keys: test) = [1, 2, 3]
-	debug.assert: (map.values: test) = ["a", "b", "c"]
+	debug.assert: (map.keys: test) is [1, 2, 3]
+	debug.assert: (map.values: test) is ["a", "b", "c"]
 	
-	let pairs = [[1, "a"], [2, "b"], [3, "c"]]
-	debug.assert: (map.kv_pairs: test) = pairs
-	debug.assert: (map.from_kv_pairs: pairs) = test
+	pairs = [[1, "a"], [2, "b"], [3, "c"]]
+	debug.assert: (map.kv_pairs: test) is pairs
+	debug.assert: (map.from_kv_pairs: pairs) is test
 	
-	let pairs = []
-	map.iter: test, (fun k, v -> pairs &= [[k, v]])
-	debug.assert: pairs = [[1, "a"], [2, "b"], [3, "c"]]
+	pairs = []
+	map.iter: test, fun k, v -> pairs &= [[k, v]]
+	debug.assert: pairs is [[1, "a"], [2, "b"], [3, "c"]]
 	
-	debug.assert: (map.get_or_default: test, 1, "d") = "a"
-	debug.assert: (map.get_or_default: test, 4, "e") = "e"
+	elem = {1 => "a", 2 => "b", 3 => "c"}
+	index_pairs = []
+	map.iteri: elem, fun i, k, v -> index_pairs &= [[i * k, v]]
+	debug.assert: index_pairs is [[0, "a"], [2, "b"], [6, "c"]]
+	
+	debug.assert: (map.get_or_default: test, 1, "d") is "a"
+	debug.assert: (map.get_or_default: test, 4, "e") is "e"
 end
 
-let io_lib() = do
-	let path = "test.txt"
-	let text1 = "hi"
-	let text2 = "\n123"
+thread_lib() = do
+	func(data) = array.chunk: data, 3
+	
+	data = array.fill: 9, fun _ -> rand.item: [-0.5, 0, 0.5]
+	id = thread.spawn: func, [data]
+	result = thread.join: id
+	
+	debug.assert: (array.get: result, 0) is [-0.5, 0, 0.5]
+	debug.assert: (array.get: result, 1) is [-0.5, 0, 0.5]
+	debug.assert: (array.get: result, 2) is [-0.5, 0.5, 0.5]
+end
+
+io_lib() = do
+	path = "test.txt"
+	text1 = "hi"
+	text2 = "\n123"
 	io.write: path, text1
-	debug.assert: (io.read: path) = text1
+	debug.assert: (io.read: path) is text1
 	
 	io.append: path, text2
-	debug.assert: (io.read: path) = text1 & text2
-	debug.assert: (io.size: path) = text.len: text1 & text2
+	debug.assert: (io.read: path) is text1 & text2
+	debug.assert: (io.size: path) is text.len: text1 & text2
 	
 	io.del: path
 	
-	let dir_path = "hi"
-	debug.assert: (io.dir_exists: dir_path) = false
+	dir_path = "hi"
+	debug.assert: not (io.dir_exists: dir_path)
 	io.make_dir: dir_path
-	debug.assert: (io.dir_exists: dir_path) = true
+	debug.assert: (io.dir_exists: dir_path)
 	io.del: dir_path
-	debug.assert: (io.dir_exists: dir_path) = false
+	debug.assert: not (io.dir_exists: dir_path)
 end
 
-let debug_lib() = do
+socket_lib() = do
+	IP = socket.LOCALHOST
+	PORT = 25565
+	GREETING = "welcome"
+	
+	server = socket.create: socket.type.STREAM
+	socket.bind: server, IP, PORT
+	socket.listen: server, 5
+	
+	client = socket.create: socket.type.STREAM
+	socket.connect: client, IP, PORT
+	
+	sv_client = socket.accept: server
+	socket.send: sv_client, GREETING
+	
+	msg = socket.recv: client
+	debug.assert: msg is GREETING
+	
+	socket.close: server
+	socket.close: client
+end
+
+debug_lib() = do
 	debug.assert: true
+	--debug.assert: (debug.call_depth;) is 4
+	debug.assert: (debug.func_name;) is
+		"testbench.lur/debug_lib"
 end
 
-let calculator_app() = do
-	let Op = enum: [
+calculator_app() = do
+	opcode = enum: [
 		"Num",
 		"Add",
 		"Sub", 
@@ -712,98 +785,101 @@ let calculator_app() = do
 		"Pow",
 		"Div",
 		"Rem",
-		"Finish",
+		"Display",
 	]
 	
-	let program = [
-		Op.Num, 128,
-		Op.Num, 2,
-		Op.Mul,
-		Op.Finish,
+	program = [
+		opcode.Num, 128,
+		opcode.Num, 2,
+		opcode.Mul,
+		opcode.Display,
 	]
 	
-	debug.assert: (arr.last: program) = Op.Finish
+	debug.assert: (array.last: program) is opcode.Display
 	
-	let cur = 0
-	let stack = []
-	let result = none
+	cur = 0
+	stack = []
+	result = none
 	
-	while: (fun -> do
-		let op = arr.get: program, cur
+	while: fun -> do
+		op = array.get: program, cur
 		cur += 1
 		
-		if op = Op.Num then do
-			stack &= arr.get: program, cur
+		if op is opcode.Num then do
+			stack &= array.get: program, cur
 			cur += 1
 		end
-		else if op = Op.Add then do
-			let b = arr.pop: stack
-			let a = arr.pop: stack
+		else if op is opcode.Add then do
+			b = array.pop: stack
+			a = array.pop: stack
 			stack &= a + b
 		end
-		else if op = Op.Sub then do
-			let b = arr.pop: stack
-			let a = arr.pop: stack
+		else if op is opcode.Sub then do
+			b = array.pop: stack
+			a = array.pop: stack
 			stack &= a - b
 		end
-		else if op = Op.Mul then do
-			let b = arr.pop: stack
-			let a = arr.pop: stack
+		else if op is opcode.Mul then do
+			b = array.pop: stack
+			a = array.pop: stack
 			stack &= a * b
 		end
-		else if op = Op.Pow then do
-			let b = arr.pop: stack
-			let a = arr.pop: stack
+		else if op is opcode.Pow then do
+			b = array.pop: stack
+			a = array.pop: stack
 			stack &= a ^ b
 		end
-		else if op = Op.Div then do
-			let b = arr.pop: stack
-			let a = arr.pop: stack
-			if b = 0 then
+		else if op is opcode.Div then do
+			b = array.pop: stack
+			a = array.pop: stack
+			if b is 0 then
 				error: "division by zero"
 			stack &= a / b
 		end
-		else if op = Op.Rem then do
-			let b = arr.pop: stack
-			let a = arr.pop: stack
-			if b = 0 then
+		else if op is opcode.Rem then do
+			b = array.pop: stack
+			a = array.pop: stack
+			if b is 0 then
 				error: "remainder of division by zero"
 			stack &= a % b
 		end
-		else if op = Op.Finish then do
-			result <- arr.last: stack
+		else if op is opcode.Display then do
+			result <- array.last: stack
 			return false
 		end
 		
 		true
-	end)
+	end
 	
-	debug.assert: result = 256
+	debug.assert: result is 256
 end
 
-let sorting_app() = do
-	let words = []
-	repeat: 1024, (fun _ -> words &=
-		rand.text: (rand.number: 3, 6), text.LETTERS)
-	words <- arr.sort: words
+sorting_app() = do
+	words = []
+	repeat: 256, fun _ -> words &=
+		rand.text: (rand.number: 3, 6), text.LETTERS
+	words <- array.sort: words
 end
 
-let fibonacci_app() = do
-	let fib(n) = if n <= 1 then n else (fib: n - 1) + (fib: n - 2)
-	let vals = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144]
-	arr.iteri: vals, (fun i, num ->
-		debug.assert: num = (arr.get: vals, i))
+fibonacci_app() = do
+	fib(n) = if n <= 1 then n else (fib: n - 1) + (fib: n - 2)
+	vals = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144]
+	array.iteri: vals, fun i, num ->
+		debug.assert: num is fib: i
 end
 
-let tests = [
+tests = [
+	"parser",
+	comments,
 	names,
 	none_literal,
 	bool_literal,
 	number_literal,
 	text_literal,
-	list_literal,
+	array_literal,
 	map_literal,
 	function_literal,
+	"operators",
 	equality,
 	comparison,
 	boolean_ops,
@@ -812,44 +888,52 @@ let tests = [
 	invert,
 	assign,
 	concat,
+	"constructs",
 	blocks,
 	functions,
 	dot,
 	arrow,
 	branches,
+	"standard library",
 	base_lib,
 	system_lib,
 	math_lib,
 	vec_lib,
 	rand_lib,
 	text_lib,
-	list_lib,
+	array_lib,
 	map_lib,
+	thread_lib,
 	io_lib,
+	socket_lib,
 	debug_lib,
+	"demo apps",
 	calculator_app,
 	sorting_app,
 	fibonacci_app,
 ]
 
-let run_times = 1
+run_times = 1
 
 io.print_ln: "n=" & run_times
-let start = call: sys.clock
-arr.iter: tests, (fun test -> do
-	let name = text.right_pad: (to_text: test), 35, "."
-	name <- text.replace_all: name, "testbench.lur/", ""
-	name <- text.replace_all: name, "(0)", ""
-	io.print: name
+start = time.clock;
+array.iter: tests, fun entry -> do
+	if (type_of: entry) is "Function" then do
+		name = text.right_pad: (to_text: entry), 35, "."
+		name <- text.replace_all: name, "testbench.lur/", ""
+		name <- text.replace_all: name, "(0)", ""
+		name <- "    " & name
+		io.print: name
 		
-	let times = []
-	repeat: run_times, (fun _ -> do
-		let start = call: sys.clock
-		call: test
-		times &= (call: sys.clock) - start
-	end)
+		times = []
+		repeat: run_times, fun _ -> do
+			start = time.clock;
+			entry;
+			times &= time.clock; - start
+		end
 	
-	let took = arr.sum: times
-	io.print_ln: "took " & took & "s"
-end)
-io.print_ln: "success! took " & ((call: sys.clock) - start) & "s"
+		took = array.sum: times
+		io.print_ln: "took " & took & "s"
+	end else io.print_ln: entry
+end
+io.print_ln: "success! took " & (time.clock; - start) & "s"
