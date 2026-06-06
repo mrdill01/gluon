@@ -7,15 +7,25 @@
 #include <ctype.h>
 #include <time.h>
 #include <math.h>
+#include <pthread.h>
 #include <dirent.h>
+#include <sys/sysinfo.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <unistd.h>
-#include <pthread.h>
 #include <errno.h>
+
+#define LUR_INCLUDE_SDL 1
+
+#if LUR_INCLUDE_SDL
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+#include <SDL2/SDL_mixer.h>
+#endif
 
 #define LUR_VERSION "lur 1.0"
 #define LUR_VERSION_MAJ 1
@@ -74,10 +84,13 @@
 	"invalid file handle '%d'", (handle)
 #define ERR_THREAD_SPAWN_FAILED(code) \
 	"thread.spawn failed (%d)", (code)
-#define ERR_MAX_THREADS(max) \
-	"maximum number of threads reached (%d)", (max)
+#define ERR_INVALID_THREAD_ID(id) \
+	"invalid thread id '%d'", (id)
 #define ERR_SOCKET_CREATE(msg) \
 	"creating socket failed: %s", (msg)
+#define ERR_SOCKET_RESOLVE_FAILED(addr) \
+	"failed to resolve hostname '%.*s'", \
+		(addr->len), (addr->buffer)
 #define ERR_SOCKET_CONNECT(addr, port, msg) \
 	"failed to connect to %.*s:%d: %s", \
 		(addr->len), (addr->buffer), (port), (msg)
@@ -135,6 +148,10 @@
 	"remainder of division by zero"
 #define ERR_ASSERTION \
 	"assertion failed"
+#define ERR_SDL(msg) \
+	"%s: %s", (msg), SDL_GetError()
+#define ERR_SDL_IMAGE(msg) \
+	"%s: %s", (msg), IMG_GetError()
 
 #if LUR_DEBUG_ASSERTS
 #define unreachable() \
@@ -163,13 +180,13 @@ typedef enum {
 	OP_SWAP,
 	OP_GETLOC,
 	OP_SETLOC,
+	OP_GETVREF,
+	OP_SETVREF,
 	OP_GETFIELD,
 	OP_SETFIELD,
 	OP_GETGLOB,
 	OP_SETGLOB,
 	OP_ADDGLOB,
-	OP_GETVREF,
-	OP_SETVREF,
 	OP_EQ,
 	OP_NE,
 	OP_NOT,
@@ -186,8 +203,8 @@ typedef enum {
 	OP_CON,
 	OP_INV,
 	OP_JMP,
-	OP_IF,
-	OP_IFNOT,
+	OP_JIF,
+	OP_JIFNOT,
 	OP_CALL,
 	OP_TAILCALL,
 	OP_RET,
@@ -212,13 +229,13 @@ static opinfo_t OPINFO[] = {
 	[OP_SWAP] = {"swap", 0},
 	[OP_GETLOC] = {"getloc", 2},
 	[OP_SETLOC] = {"setloc", 2},
+	[OP_GETVREF] = {"getvref", 2},
+	[OP_SETVREF] = {"setvref", 2},
 	[OP_GETFIELD] = {"getfield", 2},
 	[OP_SETFIELD] = {"setfield", 2},
 	[OP_GETGLOB] = {"getglob", 2},
 	[OP_SETGLOB] = {"setglob", 2},
 	[OP_ADDGLOB] = {"addglob", 2},
-	[OP_GETVREF] = {"getvref", 2},
-	[OP_SETVREF] = {"setvref", 2},
 	[OP_EQ] = {"eq", 0},
 	[OP_NE] = {"ne", 0},
 	[OP_NOT] = {"not", 0},
@@ -235,8 +252,8 @@ static opinfo_t OPINFO[] = {
 	[OP_CON] = {"con", 0},
 	[OP_INV] = {"inv", 0},
 	[OP_JMP] = {"jmp", 2},
-	[OP_IF] = {"if", 2},
-	[OP_IFNOT] = {"ifnot", 2},
+	[OP_JIF] = {"jif", 2},
+	[OP_JIFNOT] = {"jifnot", 2},
 	[OP_CALL] = {"call", 1},
 	[OP_TAILCALL] = {"tailcall", 1},
 	[OP_RET] = {"ret", 0},
@@ -789,7 +806,7 @@ typedef struct {
 } mem_t;
 
 typedef struct {
-	ssize_t memory_limit;
+	size_t memory_limit;
 } lur_config_t;
 
 typedef struct lur_t {
@@ -807,6 +824,7 @@ typedef struct lur_t {
 	array_t* thread_args;
 	value_t thread_retval;
 	array_t* argv;
+	text_t* error_msg;
 } lur_t;
 
 static unsigned nextpow2(unsigned n) {
@@ -824,6 +842,7 @@ static unsigned nextpow2(unsigned n) {
 static void text_print(const text_t*);
 static void text_eprint(const text_t* text);
 static void print_stack_trace(const lur_t*);
+static text_t* text_fmt(lur_t*, const char*, ...);
 
 static void error(lur_t* ctx, const char* msg, ...) {
 	assert(ctx && msg);
@@ -843,10 +862,11 @@ static void error(lur_t* ctx, const char* msg, ...) {
 		ctx->vm.fp->ip - func->ops];
 	else line = ctx->cl.parser.prev.line;
 	
-	lur_eprintf("[");
-	text_eprint(func->name);
-	lur_eprintf(":%d] ", line);
-	lur_eprintf("error: %s\n", buffer);
+	ctx->error_msg = text_fmt(ctx,
+		"[%.*s:%d] error: %s\n",
+			func->name->len, func->name->buffer,
+			line, buffer);
+	lur_eprintf("%s\n", ctx->error_msg->buffer);
 	
 	if (ctx->running) {
 		print_stack_trace(ctx);
@@ -856,6 +876,10 @@ static void error(lur_t* ctx, const char* msg, ...) {
 	}
 	
 	longjmp(ctx->errjmp, 1);
+}
+
+const char* lur_get_error(lur_t* ctx) {
+	return (const char*)ctx->error_msg->buffer;
 }
 
 static void print_stack_trace(const lur_t* ctx) {
@@ -895,8 +919,8 @@ static void* mem_resize(
 		ctx->mem.bytes += ns - os;
 		ctx->mem.total += ns;
 		
-		if (ctx->cfg.memory_limit != -1 &&
-			ctx->mem.bytes + ns > ctx->cfg.memory_limit)
+		if (ctx->cfg.memory_limit != 0 &&
+			ctx->mem.bytes + ns - os > ctx->cfg.memory_limit)
 			error(ctx, ERR_OUT_OF_MEMORY);
 		
 		if (ns > os && ctx->mem.bytes > ctx->mem.next_gc)
@@ -998,8 +1022,8 @@ static bool text_eq(const text_t* a, const text_t* b) {
 static text_t* text_cmp(const text_t* a, const text_t* b) {
 	assert(a && b);
 	for (int i = 0; i < (a->len < b->len) ? a->len : b->len; i++) {
-		uint8_t ac = a->buffer[i];
-		uint8_t bc = b->buffer[i];
+		uint8_t ac = tolower(a->buffer[i]);
+		uint8_t bc = tolower(b->buffer[i]);
 		if (ac < bc) return (text_t*)a;
 		if (ac > bc) return (text_t*) b;
 	}
@@ -1039,6 +1063,17 @@ static text_t* text_fmt(lur_t* ctx, const char* msg, ...) {
 	vsnprintf((char*)text->buffer, len + 1, msg, args);
 	va_end(args);
 	return text;
+}
+
+static text_t* text_slice(
+	const text_t* text, size_t start, size_t end, lur_t* ctx)
+{
+	text_t* new_text = text_new(
+		text->buffer + (size_t)start,
+		end - start,
+		ctx);
+	new_text->buffer[new_text->len] = '\0';
+	return new_text;
 }
 
 static text_t* text_escape(const text_t* input, lur_t* ctx)
@@ -1102,7 +1137,8 @@ static int64_t text_find_cstr(
 static int64_t text_find(
 	const text_t* text, const text_t* find, size_t start)
 {
-	return text_find_cstr(text, find->buffer, find->len, start);
+	return text_find_cstr(text,
+		(const char*)find->buffer, find->len, start);
 }
 
 static text_t* text_replace_all(
@@ -1208,6 +1244,24 @@ static array_t* array_new(lur_t* ctx) {
 }
 
 static void array_push(array_t*, value_t, lur_t*);
+
+array_t* lur_new_array(
+	const value_t* items, size_t len, lur_t* ctx)
+{
+	array_t* array = array_new(ctx);
+	for (size_t i = 0; i < len; i++)
+		array_push(array, items[i], ctx);
+	return array;
+}
+
+array_t* lur_new_num_array(
+	const double* items, size_t len, lur_t* ctx)
+{
+	array_t* array = array_new(ctx);
+	for (size_t i = 0; i < len; i++)
+		array_push(array, make_number(items[i]), ctx);
+	return array;
+}
 
 static array_t* array_copy(const array_t* src, lur_t* ctx) {
 	assert(src && ctx);
@@ -1496,7 +1550,7 @@ static map_entry_t* map_find_entry(
 	assert(entries);
 	uint32_t hash = value_hash(key, ctx);
 	uint32_t index = hash & (cap - 1);
-	;map_entry_t* tombstone = NULL;
+	map_entry_t* tombstone = NULL;
 	
 	for (;;) {
 		map_entry_t* entry = &entries[index];
@@ -1735,9 +1789,8 @@ static const char* type_name(type_t type) {
 	case TYPE_TEXT: return "Text";
 	case TYPE_ARRAY: return "Array";
 	case TYPE_MAP: return "Map";
-	case TYPE_FUNC: return "Function";
+	case TYPE_FUNC:
 	case TYPE_FREF: return "Function";
-	case TYPE_VREF: return "Vref";
 	default: unreachable();
 	}
 	
@@ -1762,7 +1815,7 @@ static bool type_is_obj(type_t type) {
 }
 
 static text_t* value_to_text_ex(
-	value_t value, bool quote_text, lur_t* ctx)
+	value_t value, bool quote_text, size_t max_len, lur_t* ctx)
 {
 	assert(ctx);
 	text_t* result = NULL;
@@ -1806,7 +1859,7 @@ static text_t* value_to_text_ex(
 			}
 			
 			result = text_concat(result, value_to_text_ex(
-				array->items[i], true, ctx), ctx);
+				array->items[i], true, max_len, ctx), ctx);
 			
 			if (printed < array->len - 1)
 				result = text_concat(result, text_lit(", ", ctx), ctx);
@@ -1828,10 +1881,10 @@ static text_t* value_to_text_ex(
 			}
 			
 			result = text_concat(result, value_to_text_ex(
-				entry->key, true, ctx), ctx);
+				entry->key, true, max_len, ctx), ctx);
 			result = text_concat(result, text_lit(" => ", ctx), ctx);
 			result = text_concat(result, value_to_text_ex(
-				entry->value, true, ctx), ctx);
+				entry->value, true, max_len, ctx), ctx);
 			
 			if (printed < map->len - 1)
 				result = text_concat(result, text_lit(", ", ctx), ctx);
@@ -1851,11 +1904,12 @@ static text_t* value_to_text_ex(
 		result = value_to_text(make_function(fref->func), ctx);
 		break;
 	}
-	case TYPE_VREF: {
-		result = text_lit("<vref>", ctx);
-		break;
-	}
 	default: unreachable();
+	}
+	
+	if (max_len > 0) {
+		result = text_slice(result, 0, max_len - 3, ctx);
+		result = text_concat(result, text_lit("...", ctx), ctx);
 	}
 	
 	gc_resume(ctx);
@@ -1864,21 +1918,23 @@ static text_t* value_to_text_ex(
 
 static text_t* value_to_text(value_t value, lur_t* ctx) {
 	assert(ctx);
-	return value_to_text_ex(value, false, ctx);
+	return value_to_text_ex(value, false, 0, ctx);
 }
 
 static void value_print_ex(
-	value_t value, bool quote_text, lur_t* ctx)
+	value_t value, bool quote_text, size_t max_len, lur_t* ctx)
 {
 	assert(ctx);
-	text_print(value_to_text_ex(value, quote_text, ctx));
+	text_print(value_to_text_ex(
+		value, quote_text, max_len, ctx));
 }
 
 static void value_dprint_ex(
-	value_t value, bool quote_text, lur_t* ctx)
+	value_t value, bool quote_text, size_t max_len, lur_t* ctx)
 {
 	assert(ctx);
-	text_dprint(value_to_text_ex(value, quote_text, ctx));
+	text_dprint(value_to_text_ex(
+		value, quote_text, max_len, ctx));
 }
 
 static void value_print(value_t value, lur_t* ctx) {
@@ -2381,7 +2437,7 @@ static void dbg_print_opcode(const vm_t* vm) {
 	switch (opcode) {
 	case OP_DATA: {
 		value_t value = vm->fp->func->data[u16arg];
-		value_print_ex(value, true, vm->ctx);
+		value_dprint_ex(value, true, 64, vm->ctx);
 		break;
 	}
 	case OP_NEWFREF: {
@@ -2408,42 +2464,7 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_GETLOC: {
 		value_t value = (vm->stack + vm->fp->slots)[
 			u16arg];
-		value_print_ex(value, true, vm->ctx);
-		break;
-	}
-	case OP_GETFIELD: {
-		value_t name = vm->fp->func->data[u16arg];
-		value_print(name, vm->ctx);
-		break;
-	}
-	case OP_SETFIELD: {
-		value_t name = vm->fp->func->data[u16arg];
-		value_print(name, vm->ctx);
-		break;
-	}
-	case OP_GETGLOB: {
-		value_t key = vm->fp->func->data[u16arg];
-		value_print_ex(key, true, vm->ctx);
-		lur_dprintf(": ");
-		value_t value;
-		map_get(vm->globals, key, &value, vm->ctx);
-		value_print_ex(value, true, vm->ctx);
-		break;
-	}
-	case OP_SETGLOB: {
-		value_t value = vm->fp->func->data[u16arg];
-		value_print_ex(value, true, vm->ctx);
-		lur_dprintf(": ");
-		value_print_ex(vm->sp[-1], true, vm->ctx);
-		break;
-	}
-	case OP_ADDGLOB: {
-		value_t value = vm->fp->func->data[u16arg];
-		value_print_ex(value, false, vm->ctx);
-		lur_dprintf(": ");
-		value_t key = vm->fp->func->data[u16arg];
-		map_get(vm->globals, key, &value, vm->ctx);
-		value_print_ex(value, true, vm->ctx);
+		value_dprint_ex(value, true, 64, vm->ctx);
 		break;
 	}
 	case OP_GETVREF: {
@@ -2468,6 +2489,41 @@ static void dbg_print_opcode(const vm_t* vm) {
 		}
 		break;
 	}
+	case OP_GETFIELD: {
+		value_t name = vm->fp->func->data[u16arg];
+		value_print(name, vm->ctx);
+		break;
+	}
+	case OP_SETFIELD: {
+		value_t name = vm->fp->func->data[u16arg];
+		value_print(name, vm->ctx);
+		break;
+	}
+	case OP_GETGLOB: {
+		value_t key = vm->fp->func->data[u16arg];
+		value_dprint_ex(key, true, 64, vm->ctx);
+		lur_dprintf(": ");
+		value_t value;
+		map_get(vm->globals, key, &value, vm->ctx);
+		value_dprint_ex(value, true, 64, vm->ctx);
+		break;
+	}
+	case OP_SETGLOB: {
+		value_t value = vm->fp->func->data[u16arg];
+		value_dprint_ex(value, true, 64, vm->ctx);
+		lur_dprintf(": ");
+		value_dprint_ex(vm->sp[-1], true, 64, vm->ctx);
+		break;
+	}
+	case OP_ADDGLOB: {
+		value_t value = vm->fp->func->data[u16arg];
+		value_dprint_ex(value, false, 64, vm->ctx);
+		lur_dprintf(": ");
+		value_t key = vm->fp->func->data[u16arg];
+		map_get(vm->globals, key, &value, vm->ctx);
+		value_dprint_ex(value, true, 64, vm->ctx);
+		break;
+	}
 	case OP_CALL: {
 		uint8_t argc = vm->fp->ip[1];
 		value_t value = vm->sp[-argc - 1];
@@ -2482,7 +2538,7 @@ static void dbg_print_opcode(const vm_t* vm) {
 	}
 	case OP_RET: {
 		lur_dprintf("-> ");
-		value_dprint_ex(vm->sp[-1], true, vm->ctx);
+		value_dprint_ex(vm->sp[-1], true, 64, vm->ctx);
 		break;
 	}
 	}
@@ -2661,6 +2717,20 @@ static value_t vm_launch(
 			stack_base[slot] = get(0);
 			break;
 		}
+		case OP_GETVREF: {
+			uint16_t slot = read_u16();
+			vref_t* vref = vm->fp->fref->vrefs[slot];
+			if (vref->index == -1) push(vref->closed);
+			else push(vm->stack[vref->index]);
+			break;
+		}
+		case OP_SETVREF: {
+			uint16_t slot = read_u16();
+			vref_t* vref = vm->fp->fref->vrefs[slot];
+			if (vref->index == -1) vref->closed = get(0);
+			else vm->stack[vref->index] = get(0);
+			break;
+		}
 		case OP_GETFIELD: {
 			typecheck(0, TYPE_MAP);
 			map_t* map = get_map(get(0));
@@ -2677,9 +2747,9 @@ static value_t vm_launch(
 			map_t* map = get_map(get(1));
 			value_t key = vm->fp->func->data[read_u16()];
 			map_set(map, key, get(0), vm->ctx);
-			value_t backup = pop();
+			value_t result = pop();
 			pop();
-			push(backup);
+			push(result);
 			break;
 		}
 		case OP_GETGLOB: {
@@ -2701,20 +2771,6 @@ static value_t vm_launch(
 			value_t key = vm->fp->func->data[read_u16()];
 			map_set(vm->globals, key, get(0), vm->ctx);
 			pop();
-			break;
-		}
-		case OP_GETVREF: {
-			uint16_t slot = read_u16();
-			vref_t* vref = vm->fp->fref->vrefs[slot];
-			if (vref->index == -1) push(vref->closed);
-			else push(vm->stack[vref->index]);
-			break;
-		}
-		case OP_SETVREF: {
-			uint16_t slot = read_u16();
-			vref_t* vref = vm->fp->fref->vrefs[slot];
-			if (vref->index == -1) vref->closed = get(0);
-			else vm->stack[vref->index] = get(0);
 			break;
 		}
 		case OP_EQ:
@@ -2743,9 +2799,7 @@ static value_t vm_launch(
 		case OP_CON: {
 			value_t b = pop();
 			value_t a = pop();
-			push(value_math(a, b,
-				vm->fp->ip[-1],
-				vm->ctx));
+			push(value_math(a, b, vm->fp->ip[-1], vm->ctx));
 			break;
 		}
 		case OP_INV: {
@@ -2758,12 +2812,12 @@ static value_t vm_launch(
 			vm->fp->ip += read_u16();
 			break;
 		}
-		case OP_IF: {
+		case OP_JIF: {
 			uint16_t offset = read_u16();
 			if (get_bool(get(0))) vm->fp->ip += offset;
 			break;
 		}
-		case OP_IFNOT: {
+		case OP_JIFNOT: {
 			uint16_t offset = read_u16();
 			if (!get_bool(get(0))) vm->fp->ip += offset;
 			break;
@@ -2910,28 +2964,34 @@ static token_t sc_next(scanner_t* sc) {
 	#define check(c) \
 		((*sc->pos == (c)) ? sc->pos++, true : false)
 	
+	bool is_in_comment = false;
 	while (isspace((unsigned char)*sc->pos) ||
 		(*sc->pos == '-' && sc->pos[1] == '-')) {
-		bool is_multiline = *sc->pos == '-' &&
+		if  (*sc->pos == '-' &&
 			sc->pos[1] == '-' &&
-			sc->pos[2] == '[';
+			sc->pos[2] == '[')
+			is_in_comment = true;
 		
-		if (*sc->pos == '-' && sc->pos[1] == '-') {
-			while ((*sc->pos != '\n' || is_multiline) &&
-				*sc->pos != '\0')
+		if (*sc->pos == '-' && sc->pos[1] == '-' &&
+			sc->pos[2] == '[')
+		{
+			while (*sc->pos != '\0' &&
+				!(*sc->pos == '-' && sc->pos[1] == '-' &&
+					sc->pos[2] == ']'))
 			{
-				if (is_multiline && *sc->pos == '-' &&
-					sc->pos[1] == '-' && sc->pos[2] == ']')
-				{
-					sc->pos += 3;
-					is_multiline = false;
-					break;
-				}
+				if (*sc->pos == '\n')
+					sc->line++;
 				sc->pos++;
 			}
+			is_in_comment = false;
+		}
+		
+		if (*sc->pos == '-' && sc->pos[1] == '-') {
+			while (*sc->pos != '\n' && *sc->pos != '\0')
+				sc->pos++;
 		}
 			
-		if (is_multiline)
+		if (is_in_comment)
 			error(sc->ctx, ERR_UNTERMINATED_COMMENT);
 		
 		if (*sc->pos == '\n')
@@ -3938,7 +3998,7 @@ static void cl_compile_ast(
 			cl_write(cl, binary->opcode);
 		} else {
 			int jump = cl_write_jump(cl,
-				(binary->opcode == -2) ? OP_IF : OP_IFNOT);
+				(binary->opcode == -2) ? OP_JIF : OP_JIFNOT);
 			cl_write(cl, OP_POP);
 			cl_compile_ast(cl, binary->rhs);
 			cl_patch_jump(cl, jump);
@@ -4093,7 +4153,7 @@ static void cl_compile_ast(
 		cl_open_scope(cl);
 		cl_compile_ast(cl, branch->cond);
 		
-		size_t skip_a = cl_write_jump(cl, OP_IFNOT);
+		size_t skip_a = cl_write_jump(cl, OP_JIFNOT);
 		cl_write(cl, OP_POP);
 		cl_compile_ast(cl, branch->a);
 		
@@ -4303,7 +4363,7 @@ static value_t std_type_of(value_t* args, lur_t* ctx) {
 		text_lit(type_name(args[0].tag), ctx));
 }
 
-static value_t std_to_number(value_t* args, lur_t* ctx) {
+static value_t std_as_number(value_t* args, lur_t* ctx) {
 	switch (args[0].tag) {
 	case TYPE_NONE: return make_number(0);
 	case TYPE_BOOL: return make_number(
@@ -4312,19 +4372,19 @@ static value_t std_to_number(value_t* args, lur_t* ctx) {
 	case TYPE_TEXT: return make_number(strtof(
 			(const char*)get_text(args[0])->buffer, NULL));
 	case TYPE_ARRAY: {
-		array_t* array = get_array(args[0]);
-		text_t* text = array_join(array, ctx);
-		return std_to_number(&make_text(text), ctx);
+		text_t* text = array_join(get_array(args[0]), ctx);
+		return std_as_number(&make_text(text), ctx);
 	}
+	default: unreachable();
 	}
 	return make_number(0);
 }
 
-static value_t std_to_text(value_t* args, lur_t* ctx) {
+static value_t std_as_text(value_t* args, lur_t* ctx) {
 	return make_text(value_to_text(args[0], ctx));
 }
 
-static value_t std_repeat(value_t* args, lur_t* ctx) {
+static value_t std_loop(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_FREF);
 	double n = get_number(args[0]);
@@ -4417,6 +4477,12 @@ static value_t std_enum(value_t* args, lur_t* ctx) {
 	return make_map(enum_);
 }
 
+static value_t std_assert(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_BOOL);
+	if (!get_bool(args[0])) error(ctx, ERR_ASSERTION);
+	return make_none();
+}
+
 static value_t std_time_now(value_t* args, lur_t* ctx) {
 	time_t current_time;
 	time(&current_time);
@@ -4494,6 +4560,38 @@ static const char* system_get_platform(void) {
     #else
     return "Unknown";
     #endif
+}
+
+static value_t std_system_uptime(
+	value_t* args, lur_t* ctx)
+{
+	struct sysinfo info;
+	sysinfo(&info);
+	return make_number(info.uptime);
+}
+
+static value_t std_system_total_ram(
+	value_t* args, lur_t* ctx)
+{
+	struct sysinfo info;
+	sysinfo(&info);
+	return make_number(info.totalram);
+}
+
+static value_t std_system_free_ram(
+	value_t* args, lur_t* ctx)
+{
+	struct sysinfo info;
+	sysinfo(&info);
+	return make_number(info.freeram);
+}
+
+static value_t std_system_process_count(
+	value_t* args, lur_t* ctx)
+{
+	struct sysinfo info;
+	sysinfo(&info);
+	return make_number(info.procs);
 }
 
 static value_t std_system_cmd(value_t* args, lur_t* ctx) {
@@ -5023,15 +5121,10 @@ static value_t std_text_slice(value_t* args, lur_t* ctx) {
 	if (end >= text->len)
 		error(ctx, ERR_INDEX(args[1]));
 	
-	text_t* new_text = text_new(
-		text->buffer + (size_t)start,
-		end - start,
-		ctx);
-	new_text->buffer[new_text->len] = '\0';
-	return make_text(new_text);
+	return make_text(text_slice(text, start, end, ctx));
 }
 
-static value_t std_text_to_upper(
+static value_t std_text_as_upper(
 	value_t* args, lur_t* ctx) 
 {
 	typecheck(0, TYPE_TEXT);
@@ -5042,7 +5135,7 @@ static value_t std_text_to_upper(
 	return make_text(text);
 }
 
-static value_t std_text_to_lower(
+static value_t std_text_as_lower(
 	value_t* args, lur_t* ctx) 
 {
 	typecheck(0, TYPE_TEXT);
@@ -5528,7 +5621,10 @@ static value_t std_array_any(value_t* args, lur_t* ctx) {
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { array->items[i] };
 		value_t result = lur_call_function(ctx, fref, args, 1);
-		if (result.tag == TYPE_BOOL && get_bool(result))
+		if (result.tag != TYPE_BOOL)
+			error(ctx, ERR_TYPECHECK(result.tag,
+				TYPE_BOOL));
+		if (get_bool(result))
 			return make_bool(true);
 	}
 	
@@ -5544,7 +5640,10 @@ static value_t std_array_all(value_t* args, lur_t* ctx) {
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { array->items[i] };
 		value_t result = lur_call_function(ctx, fref, args, 1);
-		if (result.tag == TYPE_BOOL && !get_bool(result))
+		if (result.tag != TYPE_BOOL)
+			error(ctx, ERR_TYPECHECK(result.tag,
+				TYPE_BOOL));
+		if (!get_bool(result))
 			return make_bool(false);
 	}
 	
@@ -5863,7 +5962,7 @@ static value_t std_thread_spawn(value_t* args, lur_t* ctx) {
 	}
 	
 	if (thread_index == -1)
-		error(ctx, ERR_MAX_THREADS(MAX_THREADS));
+		error(ctx, ERR_LIMIT("max thread", MAX_THREADS));
 	
 	int result = pthread_create(
 		&thread->id, NULL, thread_spawn, (void*)ctx);
@@ -5877,8 +5976,12 @@ static value_t std_thread_spawn(value_t* args, lur_t* ctx) {
 
 static value_t std_thread_join(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
-	size_t thread_index = (size_t)get_number(args[0]);
-	thread_t* thread = &ctx->vm.threads[thread_index];
+	size_t id = (size_t)get_number(args[0]);
+	if (id > MAX_THREADS ||
+		ctx->vm.threads[id].is_free)
+		error(ctx, ERR_INVALID_THREAD_ID(id));
+		
+	thread_t* thread = &ctx->vm.threads[id];
 	pthread_join(thread->id, NULL);
 	thread->is_free = true;
 	return ctx->thread_retval;
@@ -6035,7 +6138,7 @@ static value_t std_socket_create(value_t* args, lur_t* ctx) {
 	int handle = socket(AF_INET,
 		(type == 0) ? SOCK_STREAM : SOCK_DGRAM, 0);
 	
-	if (handle < 0)
+	if (handle == -1)
 		error(ctx, ERR_SOCKET_CREATE(strerror(errno)));
 		
 	if (setsockopt(handle,
@@ -6058,12 +6161,17 @@ static value_t std_socket_connect(value_t* args, lur_t* ctx)
 	const text_t* ip = get_text(args[1]);
 	int port = (int)get_number(args[2]);
 	
+	struct hostent* ent = gethostbyname(
+		(const char*)ip->buffer);
+	if (!ent)
+		error(ctx, ERR_SOCKET_RESOLVE_FAILED(ip));
+	
 	struct sockaddr_in addr;
 	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr(
-		(const char*)ip->buffer);
+	memcpy(&addr.sin_addr,
+		ent->h_addr_list[0], ent->h_length);
 	addr.sin_port = htons(port);
-	
+
 	int result = connect(handle,
 		(struct sockaddr*)&addr, sizeof(addr));
 	if (result == -1)
@@ -6081,10 +6189,15 @@ static value_t std_socket_bind(value_t* args, lur_t* ctx) {
 	const text_t* ip = get_text(args[1]);
 	int port = (int)get_number(args[2]);
 	
+	struct hostent* ent = gethostbyname(
+		(const char*)ip->buffer);
+	if (!ent)
+		error(ctx, ERR_SOCKET_RESOLVE_FAILED(ip));
+	
 	struct sockaddr_in addr;
 	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr(
-		(const char*)ip->buffer);
+	memcpy(&addr.sin_addr,
+		ent->h_addr_list[0], ent->h_length);
 	addr.sin_port = htons(port);
 	
 	int result = bind(handle,
@@ -6139,12 +6252,13 @@ static value_t std_socket_recv(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int handle = (int)get_number(args[0]);
 	
-	char* buffer[4096];
-	ptrdiff_t result = recv(handle, buffer, 4096, 0);
+	char* buffer[8192];
+	ptrdiff_t result = recv(handle, buffer, 8192, 0);
 	if (result == -1)
 		error(ctx, ERR_SOCKET_RECV_FAILED(
 			strerror(errno)));
-	return make_text(text_new(buffer, result - 1, ctx));
+	return make_text(text_new(
+		(const uint8_t*)buffer, result - 1, ctx));
 }
 
 static value_t std_socket_close(value_t* args, lur_t* ctx) {
@@ -6154,35 +6268,156 @@ static value_t std_socket_close(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_debug_assert(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_BOOL);
-	if (!get_bool(args[0])) error(ctx, ERR_ASSERTION);
+#if LUR_INCLUDE_SDL
+
+#define MAX_TEXTURES 8192
+
+typedef struct {
+	SDL_Window* window;
+	SDL_Renderer* renderer;
+	int width;
+	int height;
+	SDL_Texture* texs[MAX_TEXTURES];
+} video_t;
+
+static video_t video;
+
+static value_t std_video_init(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	typecheck(1, TYPE_NUMBER);
+	typecheck(2, TYPE_NUMBER);
+	const text_t* title = get_text(args[0]);
+	video.width = get_number(args[1]);
+	video.height = get_number(args[2]);
+	
+	if (SDL_Init(SDL_INIT_VIDEO) < 0)
+		error(ctx, ERR_SDL("failed to init video"));
+		
+	if (IMG_Init(IMG_INIT_PNG) < 0)
+		error(ctx, ERR_SDL_IMAGE("failed to init PNG loader"));
+		
+	for (size_t i = 0; i < MAX_TEXTURES; i++)
+		video.texs[i] = NULL;
+		
+	video.window = SDL_CreateWindow(
+		(const char*)title->buffer,
+		SDL_WINDOWPOS_CENTERED,
+		SDL_WINDOWPOS_CENTERED,
+		video.width,
+		video.height,
+		0);
+	
+	if (!video.window)
+		error(ctx, ERR_SDL("failed to create window"));
+		
+	video.renderer = SDL_CreateRenderer(
+		video.window, -1, SDL_RENDERER_ACCELERATED);
+	
+    if (!video.renderer)
+    	error(ctx, ERR_SDL("failed to create renderer"));
+    
 	return make_none();
 }
 
-static value_t std_debug_call_depth(
-	value_t* args, lur_t* ctx)
+static value_t std_video_load_tex(value_t* args, lur_t* ctx)
 {
-	return make_number(ctx->vm.ncalls);
+	typecheck(0, TYPE_TEXT);
+	const text_t* path = get_text(args[0]);
+	SDL_Texture* tex = IMG_LoadTexture(
+		video.renderer, (const char*)path->buffer);
+	if (!tex)
+		error(ctx, ERR_READ_FAILED(path));
+	
+	int64_t index = -1;
+	for (; index < MAX_TEXTURES; index++) {
+		if (!video.texs[index]) {
+			video.texs[index] = tex;
+			break;
+		}
+	}
+	
+	if (index == -1)
+		error(ctx, ERR_LIMIT("texture", MAX_TEXTURES));
+	
+	return make_number(index);
 }
 
-static value_t std_debug_func_name(
-	value_t* args, lur_t* ctx)
-{
-	return make_text(ctx->vm.fp->func->name);
+static value_t std_video_clear(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* color = get_array(args[0]);
+	SDL_SetRenderDrawColor(video.renderer,
+		get_number(color->items[0]) * 255,
+    	get_number(color->items[1]) * 255,
+    	get_number(color->items[2]) * 255,
+    	get_number(color->items[3]) * 255);
+    SDL_RenderClear(video.renderer);
 }
 
-static value_t std_debug_line(
+static value_t std_video_set_pixel(
 	value_t* args, lur_t* ctx)
 {
-	return make_number(ctx->vm.fp->func->lines[
-		ctx->vm.fp->ip - ctx->vm.fp->func->ops]);
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_ARRAY);
+	
+	const array_t* pos = get_array(args[0]);
+	const array_t* color = get_array(args[1]);
+	
+	SDL_SetRenderDrawColor(video.renderer,
+    	get_number(color->items[0]) * 255,
+    	get_number(color->items[1]) * 255,
+    	get_number(color->items[2]) * 255,
+    	get_number(color->items[3]) * 255);
+	SDL_RenderDrawPoint(video.renderer,
+		get_number(pos->items[0]),
+		get_number(pos->items[1]));
+	return make_none();
 }
+
+static value_t std_video_draw_tex(value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_ARRAY);
+	typecheck(2, TYPE_ARRAY);
+	
+	size_t id = (size_t)get_number(args[0]);
+	if (id > MAX_TEXTURES || !video.texs[id])
+		error(ctx, "invalid texture handle '%d'", id);
+		
+	const array_t* pos = get_array(args[1]);
+	const array_t* size = get_array(args[2]);
+	
+	SDL_Rect dst = (SDL_Rect){
+		get_number(pos->items[0]),
+		get_number(pos->items[1]),
+		get_number(size->items[0]),
+		get_number(size->items[1])};
+	SDL_Texture* tex = video.texs[id];
+	SDL_RenderCopy(video.renderer, tex, NULL, &dst);
+}
+
+static value_t std_video_render(
+	value_t* args, lur_t* ctx)
+{
+	SDL_RenderPresent(video.renderer);
+	return make_none();
+}
+
+static value_t std_video_shutdown(
+	value_t* args, lur_t* ctx)
+{
+	for (size_t i = 0; i < MAX_TEXTURES; i++)
+		SDL_DestroyTexture(video.texs[i]);
+	SDL_DestroyRenderer(video.renderer);
+	SDL_DestroyWindow(video.window);
+	SDL_QuitSubSystem(SDL_INIT_VIDEO);
+}
+
+#endif
 
 #undef typecheck
 
 static const map_t* lur_new_enum(
-	size_t len, const char* items[], lur_t* ctx)
+	const char* items[], size_t len, lur_t* ctx)
 {
 	map_t* enum_ = map_new(ctx);
 	for (size_t i = 0; i < len; i++)
@@ -6254,18 +6489,23 @@ void stdlib_load(lur_t* ctx) {
 	
 	stdvar_add(ctx, "GLOBALS",
 		make_map(ctx->vm.globals));
+	stdvar_add(ctx, "EXIT_SUCCESS", make_number(
+		EXIT_SUCCESS));
+	stdvar_add(ctx, "EXIT_FAILURE", make_number(
+		EXIT_FAILURE));
 	stdfun_add(ctx, "load", 1, std_load);
 	stdfun_add(ctx, "eval", 1, std_eval);
 	stdfun_add(ctx, "error", 1, std_error);
 	stdfun_add(ctx, "type_of", 1, std_type_of);
-	stdfun_add(ctx, "to_number", 1, std_to_number);
-	stdfun_add(ctx, "to_text", 1, std_to_text);
-	stdfun_add(ctx, "repeat", 2, std_repeat);
+	stdfun_add(ctx, "as_number", 1, std_as_number);
+	stdfun_add(ctx, "as_text", 1, std_as_text);
+	stdfun_add(ctx, "loop", 2, std_loop);
 	stdfun_add(ctx, "while", 1, std_while);
 	stdfun_add(ctx, "range", 2, std_range);
 	stdfun_add(ctx, "range_inc", 2, std_range_inc);
 	stdfun_add(ctx, "default_sort", 2, std_default_sort);
 	stdfun_add(ctx, "enum", 1, std_enum);
+	stdfun_add(ctx, "assert", 1, std_assert);
 	
 	std_set_map(ctx, "time");
 	stdfun_add(ctx, "now", 0, std_time_now);
@@ -6290,6 +6530,11 @@ void stdlib_load(lur_t* ctx) {
 	stdvar_add(ctx, "BUILD_TIME",
 		make_text(text_lit(__TIMESTAMP__, ctx)));
 	stdvar_add(ctx, "argv", make_array(ctx->argv));
+	stdfun_add(ctx, "uptime", 0, std_system_uptime);
+	stdfun_add(ctx, "total_ram", 0, std_system_total_ram);
+	stdfun_add(ctx, "free_ram", 0, std_system_free_ram);
+	stdfun_add(ctx, "process_count", 0,
+		std_system_process_count);
 	stdfun_add(ctx, "cmd", 1, std_system_cmd);
 	stdfun_add(ctx, "exit", 1, std_system_exit);
 	std_set_map(ctx, NULL);
@@ -6341,21 +6586,12 @@ void stdlib_load(lur_t* ctx) {
 	std_set_map(ctx, NULL);
 	
 	std_set_map(ctx, "vec");
-	array_t* x = array_new(ctx);
-	array_push(x, make_number(1.0), ctx);
-	array_push(x, make_number(0.0), ctx);
-	array_push(x, make_number(0.0), ctx);
-	stdvar_add(ctx, "X", make_array(x));
-	array_t* y = array_new(ctx);
-	array_push(y, make_number(0.0), ctx);
-	array_push(y, make_number(1.0), ctx);
-	array_push(y, make_number(0.0), ctx);
-	stdvar_add(ctx, "Y", make_array(y));
-	array_t* z = array_new(ctx);
-	array_push(z, make_number(0.0), ctx);
-	array_push(z, make_number(0.0), ctx);
-	array_push(z, make_number(1.0), ctx);
-	stdvar_add(ctx, "Z", make_array(z));
+	stdvar_add(ctx, "X", make_array(lur_new_num_array(
+		(const double[]){1, 0, 0}, 3, ctx)));
+	stdvar_add(ctx, "Y", make_array(lur_new_num_array(
+		(const double[]){0, 1, 0}, 3, ctx)));
+	stdvar_add(ctx, "Z", make_array(lur_new_num_array(
+		(const double[]){0, 0, 1}, 3, ctx)));
 	stdfun_add(ctx, "x", 1, std_vec_x);
 	stdfun_add(ctx, "y", 1, std_vec_y);
 	stdfun_add(ctx, "z", 1, std_vec_z);
@@ -6390,8 +6626,8 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "ascii", 1, std_text_ascii);
 	stdfun_add(ctx, "words", 2, std_text_words);
 	stdfun_add(ctx, "slice", 3, std_text_slice);
-	stdfun_add(ctx, "to_upper", 1, std_text_to_upper);
-	stdfun_add(ctx, "to_lower", 1, std_text_to_lower);
+	stdfun_add(ctx, "as_upper", 1, std_text_as_upper);
+	stdfun_add(ctx, "as_lower", 1, std_text_as_lower);
 	stdfun_add(ctx, "is_upper", 1, std_text_is_upper);
 	stdfun_add(ctx, "is_lower", 1, std_text_is_lower);
 	stdfun_add(ctx, "starts_with", 2, std_text_starts_with);
@@ -6483,9 +6719,9 @@ void stdlib_load(lur_t* ctx) {
 	std_set_map(ctx, "socket");
 	stdvar_add(ctx, "LOCALHOST",
 		make_text(text_lit("127.0.0.1", ctx)));
-	const char* type[] = {"STREAM", "DGRAM"};
+	const char* type[] = {"Stream", "Datagram"};
 	stdvar_add(ctx, "type",
-		make_map(lur_new_enum(2, type, ctx)));
+		make_map(lur_new_enum(type, 2, ctx)));
 	stdfun_add(ctx, "create", 1, std_socket_create);
 	stdfun_add(ctx, "connect", 3, std_socket_connect);
 	stdfun_add(ctx, "bind", 3, std_socket_bind);
@@ -6496,19 +6732,51 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "close", 1, std_socket_close);
 	std_set_map(ctx, NULL);
 	
-	std_set_map(ctx, "debug");
-	stdfun_add(ctx, "assert", 1, std_debug_assert);
-	stdfun_add(ctx, "call_depth", 0, std_debug_call_depth);
-	stdfun_add(ctx, "func_name", 0, std_debug_func_name);
-	stdfun_add(ctx, "line", 0, std_debug_line);
+	std_set_map(ctx, "color");
+	stdvar_add(ctx, "BLACK", make_array(
+		lur_new_num_array(
+			(const double[]){0, 0, 0, 1}, 4, ctx)));
+	stdvar_add(ctx, "DARK_GRAY", make_array(
+		lur_new_num_array(
+			(const double[]){0.25, 0.25, 0.25, 1}, 4, ctx)));
+	stdvar_add(ctx, "GRAY", make_array(
+		lur_new_num_array(
+			(const double[]){0.5, 0.5, 0.5, 1}, 4, ctx)));
+	stdvar_add(ctx, "WHITE", make_array(
+		lur_new_num_array(
+			(const double[]){1, 1, 1, 1}, 4, ctx)));
+	stdvar_add(ctx, "RED", make_array(
+		lur_new_num_array(
+			(const double[]){1, 0, 0, 1}, 4, ctx)));
+	stdvar_add(ctx, "GREEN", make_array(
+		lur_new_num_array(
+			(const double[]){0, 1, 0, 1}, 4, ctx)));
+	stdvar_add(ctx, "BLUE", make_array(
+		lur_new_num_array(
+			(const double[]){0, 0, 1, 1}, 4, ctx)));
 	std_set_map(ctx, NULL);
+	
+	#if LUR_INCLUDE_SDL
+	std_set_map(ctx, "video");
+	stdfun_add(ctx, "init", 3, std_video_init);
+	stdfun_add(ctx, "load_tex", 1, std_video_load_tex);
+	stdfun_add(ctx, "clear", 1, std_video_clear);
+	stdfun_add(ctx, "set_pixel", 2, std_video_set_pixel);
+	stdfun_add(ctx, "draw_tex", 3, std_video_draw_tex);
+	stdfun_add(ctx, "render", 0, std_video_render);
+	stdfun_add(ctx, "shutdown", 0, std_video_shutdown);
+	std_set_map(ctx, NULL);
+	
+	std_set_map(ctx, "audio");
+	std_set_map(ctx, NULL);
+	#endif
 	
 	gc_resume(ctx);
 }
 
 lur_config_t lur_default_config(void) {
 	lur_config_t cfg;
-	cfg.memory_limit = -1;
+	cfg.memory_limit = 0;
 	return cfg;
 }
 
@@ -6588,36 +6856,49 @@ static void exec(
 	ctx->running = false;
 }
 
-void lur_xstring(lur_t* ctx, const char* src) {
-	if (!ctx) return;
-	if (setjmp(ctx->errjmp)) return;
-	exec(ctx,
-		text_lit(src, ctx), text_lit("[src]", ctx));
+bool lur_xstring(lur_t* ctx, const char* src) {
+	if (!ctx) return false;
+	if (setjmp(ctx->errjmp)) return false;
+	exec(ctx, text_lit(src, ctx), text_lit("[src]", ctx));
+	return true;
 }
 
-void lur_xfile(lur_t* ctx, const char* path) {
-	if (!ctx) return;
-	if (setjmp(ctx->errjmp)) return;
+bool lur_xfile(lur_t* ctx, const char* path) {
+	if (!ctx) return false;
+	if (setjmp(ctx->errjmp)) return false;
 	exec(ctx,
-		io_read(text_lit(path, ctx), ctx),
-		text_lit(path, ctx));
+		io_read(text_lit(path, ctx), ctx), text_lit(path, ctx));
+	return true;
 }
 
-static void interpret(lur_t* ctx) {
+static bool interpret(lur_t* ctx) {
 	lur_printf("%s\n", LUR_VERSION);
 	ctx->interpreter = true;
 	for (;;) {
 		lur_printf(":: ");
-		lur_xstring(ctx,
-			(const char*)io_read_stdin(ctx)->buffer);
+		if (!lur_xstring(ctx,
+			(const char*)io_read_stdin(ctx)->buffer))
+			return false;
 	}
+	
+	return true;
 }
 
 int main(int argc, char* argv[]) {
 	lur_config_t cfg = lur_default_config();
 	lur_t* ctx = lur_new(cfg, argc, argv);
-	if (argc == 2) lur_xfile(ctx, argv[1]);
-	else interpret(ctx);
+	
+	bool success = true;
+	if (argc == 2) success = lur_xfile(ctx, argv[1]);
+	else success = interpret(ctx);
+	
+	if (!success) {
+		io_write(
+			text_lit("log.txt", ctx),
+			text_lit(lur_get_error(ctx), ctx),
+			ctx);
+		exit(EXIT_FAILURE);
+	}
 	
 	lur_free(ctx);
 	return EXIT_SUCCESS;
