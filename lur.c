@@ -41,7 +41,7 @@
 #define LUR_DEBUG_PRINT_TOKENS 0
 #define LUR_DEBUG_PRINT_ALLOCS 0
 #define LUR_DEBUG_PRINT_MEM_STATS 0
-#define LUR_DEBUG_DISABLE_GC 1
+#define LUR_DEBUG_DISABLE_GC 0
 
 #define lur_printf printf
 #define lur_eprintf printf
@@ -2737,6 +2737,40 @@ static value_t vm_launch(
 			break;
 		}
 		case OP_GETFIELD: {
+			if (get(0).tag == TYPE_ARRAY) {
+				gc_pause(vm->ctx);
+				
+				const array_t* array = get_array(pop());
+				value_t key = vm->fp->func->data[read_u16()];
+				if (value_eq(key,
+					make_text(text_lit("x", vm->ctx))))
+				{
+					push(array->items[
+						array_convert_index(array, 0.0, vm->ctx)]);
+				} else if (value_eq(key,
+					make_text(text_lit("y", vm->ctx))))
+				{
+					push(array->items[
+						array_convert_index(array, 1.0, vm->ctx)]);
+				} else if (value_eq(key,
+					make_text(text_lit("z", vm->ctx))))
+				{
+					push(array->items[
+						array_convert_index(array, 2.0, vm->ctx)]);
+				} else if (value_eq(key,
+					make_text(text_lit("w", vm->ctx))))
+				{
+					push(array->items[
+						array_convert_index(array, 3.0, vm->ctx)]);
+				} else {
+					error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
+					unreachable();
+				}
+				
+				gc_resume(vm->ctx);
+				break;
+			}
+			
 			typecheck(0, TYPE_MAP);
 			map_t* map = get_map(get(0));
 			value_t key = vm->fp->func->data[read_u16()];
@@ -2748,6 +2782,46 @@ static value_t vm_launch(
 			break;
 		}
 		case OP_SETFIELD: {
+			if (get(1).tag == TYPE_ARRAY) {
+				gc_pause(vm->ctx);
+				
+				value_t value = pop();
+				const array_t* array = get_array(pop());
+				value_t key = vm->fp->func->data[read_u16()];
+				if (value_eq(key,
+					make_text(text_lit("x", vm->ctx))))
+				{
+					array->items[
+						array_convert_index(array, 0.0, vm->ctx)] =
+							value;
+				} else if (value_eq(key,
+					make_text(text_lit("y", vm->ctx))))
+				{
+					array->items[
+						array_convert_index(array, 1.0, vm->ctx)] =
+							value;
+				} else if (value_eq(key,
+					make_text(text_lit("z", vm->ctx))))
+				{
+					array->items[
+						array_convert_index(array, 2.0, vm->ctx)] =
+							value;
+				} else if (value_eq(key,
+					make_text(text_lit("w", vm->ctx))))
+				{
+					array->items[
+						array_convert_index(array, 3.0, vm->ctx)] =
+							value;
+				} else {
+					error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
+					unreachable();
+				}
+				
+				push(value);
+				gc_resume(vm->ctx);
+				break;
+			}
+			
 			typecheck(1, TYPE_MAP);
 			map_t* map = get_map(get(1));
 			value_t key = vm->fp->func->data[read_u16()];
@@ -4575,20 +4649,41 @@ static value_t std_system_uptime(
 	return make_number(info.uptime);
 }
 
+static size_t system_total_ram(void) {
+	struct sysinfo info;
+	sysinfo(&info);
+	return info.totalram;
+}
+
+static size_t system_free_ram(void) {
+	struct sysinfo info;
+	sysinfo(&info);
+	return info.freeram;
+}
+
+static size_t system_average_load(void) {
+	struct sysinfo info;
+	sysinfo(&info);
+	float factor = 1.0 / (1 << SI_LOAD_SHIFT);
+	return info.loads[0] * factor;
+}
+
 static value_t std_system_total_ram(
 	value_t* args, lur_t* ctx)
 {
-	struct sysinfo info;
-	sysinfo(&info);
-	return make_number(info.totalram);
+	return make_number(system_total_ram());
 }
 
 static value_t std_system_free_ram(
 	value_t* args, lur_t* ctx)
 {
-	struct sysinfo info;
-	sysinfo(&info);
-	return make_number(info.freeram);
+	return make_number(system_free_ram());
+}
+
+static value_t std_system_average_load(
+	value_t* args, lur_t* ctx)
+{
+	return make_number(system_average_load());
 }
 
 static value_t std_system_process_count(
@@ -6273,7 +6368,66 @@ static value_t std_socket_close(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+static value_t std_debug_stats(value_t* args, lur_t* ctx) {
+	map_t* stats = map_new(ctx);
+	map_set(stats, make_text(text_lit("total ram", ctx)),
+		make_number(
+			system_total_ram() / 1024.0 / 1024.0), ctx);
+	map_set(stats, make_text(text_lit("free ram", ctx)),
+		make_number(
+			system_free_ram() / 1024.0 / 1024.0), ctx);
+	map_set(stats, make_text(text_lit("average load", ctx)),
+		make_number(
+			system_average_load()), ctx);
+	map_set(stats, make_text(text_lit("current heap", ctx)),
+		make_number(
+			ctx->mem.bytes / 1024.0 / 1024.0), ctx);
+	map_set(stats, make_text(text_lit("total heap", ctx)),
+		make_number(ctx->mem.total / 1024.0 / 1024.0), ctx);
+	map_set(stats, make_text(text_lit("next GC", ctx)),
+		make_number(
+			(ctx->mem.next_gc - ctx->mem.bytes) /
+				1024.0 / 1024.0), ctx);
+	return make_map(stats);
+}
+
 #if LUR_INCLUDE_SDL
+
+typedef struct {
+	uint64_t now;
+	uint64_t last;
+	double dt;
+	double total;
+} game_time_t;
+
+static game_time_t game_time;
+
+static value_t std_game_time_init(value_t* args, lur_t* ctx)
+{
+	game_time.now = SDL_GetPerformanceCounter();
+	game_time.last = 0;
+}
+
+static value_t std_game_time_update(
+	value_t* args, lur_t* ctx)
+{
+	game_time.last = game_time.now;
+	game_time.now = SDL_GetPerformanceCounter();
+	game_time.dt = (double)
+		((game_time.now - game_time.last) * 1000) /
+			SDL_GetPerformanceFrequency();
+	game_time.total += game_time.dt;
+}
+
+static value_t std_game_time_dt(value_t* args, lur_t* ctx) {
+	return make_number(game_time.dt);
+}
+
+static value_t std_game_time_total(
+	value_t* args, lur_t* ctx)
+{
+	return make_number(game_time.total);
+}
 
 #define MAX_TEXTURES 8192
 
@@ -6385,39 +6539,49 @@ static value_t std_video_draw_line(
 {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_ARRAY);
-	typecheck(2, TYPE_ARRAY);
+	typecheck(2, TYPE_NUMBER);
+	typecheck(3, TYPE_ARRAY);
 	
 	const array_t* start = get_array(args[0]);
 	const array_t* end = get_array(args[1]);
-	const array_t* color = get_array(args[2]);
+	double width = get_number(args[2]);
+	const array_t* color = get_array(args[3]);
 	
-	int x0 = get_number(start->items[0]);
-	int y0 = get_number(start->items[1]);
-	int x1 = get_number(end->items[0]);
-	int y1 = get_number(end->items[1]);
+	for (double i = -width / 2; i < width / 2; i += 0.5) {
+		int x0 = get_number(start->items[0]);
+		int y0 = get_number(start->items[1]);
+		int x1 = get_number(end->items[0]);
+		int y1 = get_number(end->items[1]);
 	
-	int dx = abs(x1 - x0);
-	int sx = (x0 < x1) ? 1 : -1;
-	int dy = abs(y1 - y0);
-	int sy = (y0 < y1) ? 1 : -1;
-	int err = ((dx > dy) ? dx : -dy) / 2;
-	int err2 = 0;
+		int dx = abs(x1 - x0);
+		int dy = abs(y1 - y0);
+		int sx = (x0 < x1) ? 1 : -1;
+		int sy = (y0 < y1) ? 1 : -1;
+		int err = ((dx > dy) ? dx : -dy) / 2;
+		int err2 = 0;
 	
-	for (;;) {
-		SDL_SetRenderDrawColor(video.renderer,
-    		get_number(color->items[0]) * 255,
-    		get_number(color->items[1]) * 255,
-    		get_number(color->items[2]) * 255,
-    		get_number(color->items[3]) * 255);
-		SDL_RenderDrawPoint(video.renderer, x0, y0);
+		x0 += i * -sx;
+		y0 += i * sy;
+		x1 += i * -sx;
+		y1 += i * sy;
+	
+		for (;;) {
+			SDL_SetRenderDrawColor(video.renderer,
+    			get_number(color->items[0]) * 255,
+    			get_number(color->items[1]) * 255,
+    			get_number(color->items[2]) * 255,
+    			get_number(color->items[3]) * 255);
+			SDL_RenderDrawPoint(video.renderer, x0, y0);
 			
-		if (x0 == x1 && y0 == y1)
-			break;
+			if (x0 == x1 && y0 == y1)
+				break;
 		
-		err2 = err;
-		if (err2 > -dx) { err -= dy; x0 += sx; }
-		if (err2 < dy) { err += dx; y0 += sy; }
+			err2 = err * 2;
+			if (err2 > -dx) { err -= dy; x0 += sx; }
+			if (err2 < dy) { err += dx; y0 += sy; }
+		}
 	}
+	return make_none();
 }
 
 static value_t std_video_draw_tex(value_t* args, lur_t* ctx)
@@ -6468,6 +6632,7 @@ static value_t std_video_screenshot(
 	if (!IMG_SavePNG(sshot, (const char*)path->buffer))
 		error(ctx, ERR_SDL_IMAGE(path));
 	SDL_FreeSurface(sshot);
+	return make_none();
 }
 
 static value_t std_video_shutdown(
@@ -6481,34 +6646,55 @@ static value_t std_video_shutdown(
 	return make_none();
 }
 
+#define FONT_SIZE 26
+
 typedef struct {
 	TTF_Font* font;
-} ui_t;
+	SDL_Texture* button;
+} gui_t;
 
-static ui_t ui;
+static gui_t gui;
 
-static value_t std_ui_init(value_t* args, lur_t* ctx) {
+static value_t std_gui_init(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
-	const text_t* path = get_text(args[0]);
+	typecheck(1, TYPE_TEXT);
+	const text_t* font_path = get_text(args[0]);
+	const text_t* button_path = get_text(args[1]);
 	
 	if (TTF_Init() < 0)
 		error(ctx, ERR_SDL_TTF("failed to init TTF loader"));
 		
-	ui.font = TTF_OpenFont((const char*)path->buffer, 18);
-	if (!ui.font)
-		error(ctx, ERR_READ_FAILED(path));
+	gui.font = TTF_OpenFont(
+		(const char*)font_path->buffer, FONT_SIZE);
+	if (!gui.font)
+		error(ctx, ERR_READ_FAILED(font_path));
+		
+	gui.button = IMG_LoadTexture(
+		video.renderer, (const char*)button_path->buffer);
+	if (!gui.button)
+		error(ctx, ERR_READ_FAILED(button_path));
 		
 	return make_none();
 }
 
-static value_t std_ui_draw_text(value_t* args, lur_t* ctx) {
+static void ui_get_text_size(
+	const text_t* text, int* w, int* h, lur_t* ctx)
+{
+	assert(w && h);
+	int result = TTF_SizeUTF8(gui.font,
+		(const char*)text->buffer, w, h);
+	if (result < 0)
+		error(ctx, ERR_SDL_TTF("failed to calculate text size"));
+}
+
+static value_t std_gui_draw_text(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_ARRAY);
 	typecheck(2, TYPE_ARRAY);
 	
 	const text_t* text = get_text(args[0]);
-	const array_t* pos = get_text(args[1]);
-	const array_t* color = get_text(args[2]);
+	const array_t* pos = get_array(args[1]);
+	const array_t* color = get_array(args[2]);
 	
 	SDL_Color col = (SDL_Color){
 		get_number(color->items[0]) * 255,
@@ -6517,7 +6703,7 @@ static value_t std_ui_draw_text(value_t* args, lur_t* ctx) {
 		get_number(color->items[3]) * 255};
 	
 	SDL_Surface* surf = TTF_RenderText_Solid(
-		ui.font, (const char*)text->buffer, col);
+		gui.font, (const char*)text->buffer, col);
 	if (!surf)
 		error(ctx, ERR_SDL("failed to create text surface"));
 	
@@ -6527,10 +6713,7 @@ static value_t std_ui_draw_text(value_t* args, lur_t* ctx) {
 		error(ctx, ERR_SDL("failed to create text texture"));
 	
 	int w, h;
-	int result = TTF_SizeUTF8(ui.font,
-		(const char*)text->buffer, &w, &h);
-	if (result < 0)
-		error(ctx, ERR_SDL_TTF("failed to calculate text size"));
+	ui_get_text_size(text, &w, &h, ctx);
 	
 	SDL_Rect dst = (SDL_Rect){
 		get_number(pos->items[0]),
@@ -6540,8 +6723,58 @@ static value_t std_ui_draw_text(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_ui_shutdown(value_t* args, lur_t* ctx) {
-	TTF_CloseFont(ui.font);
+static value_t std_gui_draw_button(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_TEXT);
+	typecheck(1, TYPE_ARRAY);
+	typecheck(2, TYPE_ARRAY);
+	typecheck(3, TYPE_ARRAY);
+	typecheck(4, TYPE_ARRAY);
+	
+	const text_t* text = get_text(args[0]);
+	const array_t* pos = get_array(args[1]);
+	const array_t* size = get_array(args[2]);
+	const array_t* color = get_array(args[3]);
+	const array_t* text_color = get_array(args[4]);
+	
+	SDL_SetTextureColorMod(gui.button,
+    	get_number(color->items[0]) * 255,
+    	get_number(color->items[1]) * 255,
+    	get_number(color->items[2]) * 255);
+    SDL_SetTextureAlphaMod(gui.button,
+    	get_number(color->items[3]) * 255);
+    
+	SDL_Rect dst = (SDL_Rect){
+		get_number(pos->items[0]),
+		get_number(pos->items[1]),
+		get_number(size->items[0]),
+		get_number(size->items[1])};
+	SDL_RenderCopy(video.renderer,
+		gui.button, NULL, &dst);
+	
+	int text_w, text_h;
+	ui_get_text_size(text, &text_w, &text_h, ctx);
+	
+	array_t* text_pos = array_copy(pos, ctx);
+	int x = get_number(text_pos->items[0]);
+	text_pos->items[0] = make_number(
+		x + dst.w / 2 - text_w / 2);
+	
+	int y = get_number(text_pos->items[1]);
+	text_pos->items[1] = make_number(
+		y + dst.h / 2 - text_h / 2);
+	
+	value_t text_args[] = {
+			args[0], make_array(text_pos), args[4]};
+	std_gui_draw_text(text_args, ctx);
+	
+	return make_none();
+}
+
+static value_t std_gui_shutdown(value_t* args, lur_t* ctx) {
+	TTF_CloseFont(gui.font);
+	SDL_DestroyTexture(gui.button);
 	return make_none();
 }
 
@@ -6577,14 +6810,15 @@ static value_t std_audio_set_volume(
 {
 	typecheck(0, TYPE_NUMBER);
 	double volume = get_number(args[0]);
-	Mix_Volume(-1, volume);
+	Mix_Volume(-1, volume * 128.0);
+	Mix_VolumeMusic(volume * 128.0);
 	return make_none();
 }
 
 static value_t std_audio_get_volume(
 	value_t* args, lur_t* ctx)
 {
-	return make_number(Mix_Volume(-1, -1));
+	return make_number(Mix_Volume(-1, -1) * 128.0);
 }
 
 static value_t std_audio_load(
@@ -6800,6 +7034,8 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "uptime", 0, std_system_uptime);
 	stdfun_add(ctx, "total_ram", 0, std_system_total_ram);
 	stdfun_add(ctx, "free_ram", 0, std_system_free_ram);
+	stdfun_add(ctx, "average_load", 0,
+		std_system_average_load);
 	stdfun_add(ctx, "process_count", 0,
 		std_system_process_count);
 	stdfun_add(ctx, "cmd", 1, std_system_cmd);
@@ -6999,6 +7235,10 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "close", 1, std_socket_close);
 	std_set_map(ctx, NULL);
 	
+	std_set_map(ctx, "debug");
+	stdfun_add(ctx, "stats", 0, std_debug_stats);
+	std_set_map(ctx, NULL);
+	
 	std_set_map(ctx, "color");
 	stdvar_add(ctx, "BLACK", make_array(
 		lur_new_num_array(
@@ -7024,22 +7264,30 @@ void stdlib_load(lur_t* ctx) {
 	std_set_map(ctx, NULL);
 	
 	#if LUR_INCLUDE_SDL
+	std_set_map(ctx, "game_time");
+	stdfun_add(ctx, "init", 0, std_game_time_init);
+	stdfun_add(ctx, "update", 0, std_game_time_update);
+	stdfun_add(ctx, "dt", 0, std_game_time_dt);
+	stdfun_add(ctx, "total", 0, std_game_time_total);
+	std_set_map(ctx, NULL);
+	
 	std_set_map(ctx, "video");
 	stdfun_add(ctx, "init", 3, std_video_init);
 	stdfun_add(ctx, "load_tex", 1, std_video_load_tex);
 	stdfun_add(ctx, "clear", 1, std_video_clear);
 	stdfun_add(ctx, "set_pixel", 2, std_video_set_pixel);
-	stdfun_add(ctx, "draw_line", 3, std_video_draw_line);
+	stdfun_add(ctx, "draw_line", 4, std_video_draw_line);
 	stdfun_add(ctx, "draw_tex", 3, std_video_draw_tex);
 	stdfun_add(ctx, "render", 0, std_video_render);
 	stdfun_add(ctx, "screenshot", 1, std_video_screenshot);
 	stdfun_add(ctx, "shutdown", 0, std_video_shutdown);
 	std_set_map(ctx, NULL);
 	
-	std_set_map(ctx, "ui");
-	stdfun_add(ctx, "init", 1, std_ui_init);
-	stdfun_add(ctx, "draw_text", 3, std_ui_draw_text);
-	stdfun_add(ctx, "shutdown", 0, std_ui_shutdown);
+	std_set_map(ctx, "gui");
+	stdfun_add(ctx, "init", 2, std_gui_init);
+	stdfun_add(ctx, "draw_text", 3, std_gui_draw_text);
+	stdfun_add(ctx, "draw_button", 5, std_gui_draw_button);
+	stdfun_add(ctx, "shutdown", 0, std_gui_shutdown);
 	std_set_map(ctx, NULL);
 	
 	std_set_map(ctx, "audio");
