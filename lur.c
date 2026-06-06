@@ -24,6 +24,7 @@
 #if LUR_INCLUDE_SDL
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
+#include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_mixer.h>
 #endif
 
@@ -152,6 +153,10 @@
 	"%s: %s", (msg), SDL_GetError()
 #define ERR_SDL_IMAGE(msg) \
 	"%s: %s", (msg), IMG_GetError()
+#define ERR_SDL_TTF(msg) \
+	"%s: %s", (msg), TTF_GetError()
+#define ERR_SDL_MIXER(msg) \
+	"%s: %s", (msg), Mix_GetError()
 
 #if LUR_DEBUG_ASSERTS
 #define unreachable() \
@@ -6329,9 +6334,10 @@ static value_t std_video_load_tex(value_t* args, lur_t* ctx)
 		error(ctx, ERR_READ_FAILED(path));
 	
 	int64_t index = -1;
-	for (; index < MAX_TEXTURES; index++) {
-		if (!video.texs[index]) {
-			video.texs[index] = tex;
+	for (size_t i = 0; i < MAX_TEXTURES; i++) {
+		if (!video.texs[i]) {
+			video.texs[i] = tex;
+			index = i;
 			break;
 		}
 	}
@@ -6351,6 +6357,7 @@ static value_t std_video_clear(value_t* args, lur_t* ctx) {
     	get_number(color->items[2]) * 255,
     	get_number(color->items[3]) * 255);
     SDL_RenderClear(video.renderer);
+    return make_none();
 }
 
 static value_t std_video_set_pixel(
@@ -6373,6 +6380,46 @@ static value_t std_video_set_pixel(
 	return make_none();
 }
 
+static value_t std_video_draw_line(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_ARRAY);
+	typecheck(2, TYPE_ARRAY);
+	
+	const array_t* start = get_array(args[0]);
+	const array_t* end = get_array(args[1]);
+	const array_t* color = get_array(args[2]);
+	
+	int x0 = get_number(start->items[0]);
+	int y0 = get_number(start->items[1]);
+	int x1 = get_number(end->items[0]);
+	int y1 = get_number(end->items[1]);
+	
+	int dx = abs(x1 - x0);
+	int sx = (x0 < x1) ? 1 : -1;
+	int dy = abs(y1 - y0);
+	int sy = (y0 < y1) ? 1 : -1;
+	int err = ((dx > dy) ? dx : -dy) / 2;
+	int err2 = 0;
+	
+	for (;;) {
+		SDL_SetRenderDrawColor(video.renderer,
+    		get_number(color->items[0]) * 255,
+    		get_number(color->items[1]) * 255,
+    		get_number(color->items[2]) * 255,
+    		get_number(color->items[3]) * 255);
+		SDL_RenderDrawPoint(video.renderer, x0, y0);
+			
+		if (x0 == x1 && y0 == y1)
+			break;
+		
+		err2 = err;
+		if (err2 > -dx) { err -= dy; x0 += sx; }
+		if (err2 < dy) { err += dx; y0 += sy; }
+	}
+}
+
 static value_t std_video_draw_tex(value_t* args, lur_t* ctx)
 {
 	typecheck(0, TYPE_NUMBER);
@@ -6393,6 +6440,7 @@ static value_t std_video_draw_tex(value_t* args, lur_t* ctx)
 		get_number(size->items[1])};
 	SDL_Texture* tex = video.texs[id];
 	SDL_RenderCopy(video.renderer, tex, NULL, &dst);
+	return make_none();
 }
 
 static value_t std_video_render(
@@ -6400,6 +6448,26 @@ static value_t std_video_render(
 {
 	SDL_RenderPresent(video.renderer);
 	return make_none();
+}
+
+static value_t std_video_screenshot(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_TEXT);
+	const text_t* path = get_text(args[0]);
+	SDL_Surface *sshot = SDL_CreateRGBSurface(
+		0, video.width, video.height, 32,
+		0x00ff0000,
+		0x0000ff00,
+		0x000000ff,
+		0xff000000);
+	if (SDL_RenderReadPixels(video.renderer, NULL,
+		sshot->format->format, sshot->pixels, sshot->pitch)
+			< 0)
+		error(ctx, ERR_SDL("failed to read pixels"));
+	if (!IMG_SavePNG(sshot, (const char*)path->buffer))
+		error(ctx, ERR_SDL_IMAGE(path));
+	SDL_FreeSurface(sshot);
 }
 
 static value_t std_video_shutdown(
@@ -6410,6 +6478,205 @@ static value_t std_video_shutdown(
 	SDL_DestroyRenderer(video.renderer);
 	SDL_DestroyWindow(video.window);
 	SDL_QuitSubSystem(SDL_INIT_VIDEO);
+	return make_none();
+}
+
+typedef struct {
+	TTF_Font* font;
+} ui_t;
+
+static ui_t ui;
+
+static value_t std_ui_init(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	const text_t* path = get_text(args[0]);
+	
+	if (TTF_Init() < 0)
+		error(ctx, ERR_SDL_TTF("failed to init TTF loader"));
+		
+	ui.font = TTF_OpenFont((const char*)path->buffer, 18);
+	if (!ui.font)
+		error(ctx, ERR_READ_FAILED(path));
+		
+	return make_none();
+}
+
+static value_t std_ui_draw_text(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	typecheck(1, TYPE_ARRAY);
+	typecheck(2, TYPE_ARRAY);
+	
+	const text_t* text = get_text(args[0]);
+	const array_t* pos = get_text(args[1]);
+	const array_t* color = get_text(args[2]);
+	
+	SDL_Color col = (SDL_Color){
+		get_number(color->items[0]) * 255,
+		get_number(color->items[1]) * 255,
+		get_number(color->items[2]) * 255,
+		get_number(color->items[3]) * 255};
+	
+	SDL_Surface* surf = TTF_RenderText_Solid(
+		ui.font, (const char*)text->buffer, col);
+	if (!surf)
+		error(ctx, ERR_SDL("failed to create text surface"));
+	
+	SDL_Texture* tex = SDL_CreateTextureFromSurface(
+		video.renderer, surf);
+	if (!tex)
+		error(ctx, ERR_SDL("failed to create text texture"));
+	
+	int w, h;
+	int result = TTF_SizeUTF8(ui.font,
+		(const char*)text->buffer, &w, &h);
+	if (result < 0)
+		error(ctx, ERR_SDL_TTF("failed to calculate text size"));
+	
+	SDL_Rect dst = (SDL_Rect){
+		get_number(pos->items[0]),
+		get_number(pos->items[1]),
+		w, h};
+	SDL_RenderCopy(video.renderer, tex, NULL, &dst);
+	return make_none();
+}
+
+static value_t std_ui_shutdown(value_t* args, lur_t* ctx) {
+	TTF_CloseFont(ui.font);
+	return make_none();
+}
+
+#define MAX_SOUNDS 1024
+#define MAX_MUSIC 16
+
+typedef struct {
+	Mix_Chunk* sounds[MAX_SOUNDS];
+	Mix_Music* music[MAX_MUSIC];
+} audio_t;
+
+static audio_t audio;
+
+static value_t std_audio_init(value_t* args, lur_t* ctx) {
+	if (SDL_Init(SDL_INIT_AUDIO) < 0)
+		error(ctx, ERR_SDL("failed to init audio"));
+		
+	if (Mix_OpenAudio(48000,
+		MIX_DEFAULT_FORMAT, 2, 4096) < 0)
+		error(ctx, ERR_SDL_MIXER("failed to open audio"));
+		
+	for (size_t i = 0; i < MAX_SOUNDS; i++)
+		audio.sounds[i] = NULL;
+		
+	for (size_t i = 0; i < MAX_MUSIC; i++)
+		audio.music[i] = NULL;
+		
+	return make_none();
+}
+
+static value_t std_audio_set_volume(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_NUMBER);
+	double volume = get_number(args[0]);
+	Mix_Volume(-1, volume);
+	return make_none();
+}
+
+static value_t std_audio_get_volume(
+	value_t* args, lur_t* ctx)
+{
+	return make_number(Mix_Volume(-1, -1));
+}
+
+static value_t std_audio_load(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_TEXT);
+	const text_t* path = get_text(args[0]);
+	Mix_Chunk* sound = Mix_LoadWAV(
+		(const char*)path->buffer);
+	
+	if (!sound)
+		error(ctx, ERR_READ_FAILED(path));
+	
+	int64_t index = -1;
+	for (size_t i = 0; i < MAX_SOUNDS; i++) {
+		if (!audio.sounds[i]) {
+			audio.sounds[i] = sound;
+			index = i;
+			break;
+		}
+	}
+	
+	if (index == -1)
+		error(ctx, ERR_LIMIT("sound", MAX_SOUNDS));
+	
+	return make_number(index);
+}
+
+static value_t std_audio_load_music(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_TEXT);
+	const text_t* path = get_text(args[0]);
+	Mix_Music* music = Mix_LoadMUS(
+		(const char*)path->buffer);
+	
+	if (!music)
+		error(ctx, ERR_READ_FAILED(path));
+	
+	int64_t index = -1;
+	for (size_t i = 0; i < MAX_MUSIC; i++) {
+		if (!audio.music[i]) {
+			audio.music[i] = music;
+			index = i;
+			break;
+		}
+	}
+	
+	if (index == -1)
+		error(ctx, ERR_LIMIT("music", MAX_MUSIC));
+	
+	return make_number(index);
+}
+
+static value_t std_audio_play(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_NUMBER);
+	size_t id = (size_t)get_number(args[0]);
+	if (id > MAX_SOUNDS || !audio.sounds[id])
+		error(ctx, "invalid sound handle '%d'", id);
+	
+	Mix_Chunk* sound = audio.sounds[id];
+	if (Mix_PlayChannel(-1, sound, 0) < 0)
+		error(ctx, ERR_SDL_MIXER("failed to play sound"));
+		
+	return make_none();
+}
+
+static value_t std_audio_play_music(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_NUMBER);
+	size_t id = (size_t)get_number(args[0]);
+	if (id > MAX_MUSIC || !audio.music[id])
+		error(ctx, "invalid music handle '%d'", id);
+	
+	Mix_Music* music = audio.music[id];
+	if (Mix_PlayMusic(music, 1) < 0)
+		error(ctx, ERR_SDL_MIXER("failed to play music"));
+		
+	return make_none();
+}
+
+static value_t std_audio_shutdown(
+	value_t* args, lur_t* ctx)
+{
+	for (size_t i = 0; i < MAX_SOUNDS; i++)
+		Mix_FreeChunk(audio.sounds[i]);
+	Mix_CloseAudio();
+	SDL_QuitSubSystem(SDL_INIT_AUDIO);
+	return make_none();
 }
 
 #endif
@@ -6762,12 +7029,30 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "load_tex", 1, std_video_load_tex);
 	stdfun_add(ctx, "clear", 1, std_video_clear);
 	stdfun_add(ctx, "set_pixel", 2, std_video_set_pixel);
+	stdfun_add(ctx, "draw_line", 3, std_video_draw_line);
 	stdfun_add(ctx, "draw_tex", 3, std_video_draw_tex);
 	stdfun_add(ctx, "render", 0, std_video_render);
+	stdfun_add(ctx, "screenshot", 1, std_video_screenshot);
 	stdfun_add(ctx, "shutdown", 0, std_video_shutdown);
 	std_set_map(ctx, NULL);
 	
+	std_set_map(ctx, "ui");
+	stdfun_add(ctx, "init", 1, std_ui_init);
+	stdfun_add(ctx, "draw_text", 3, std_ui_draw_text);
+	stdfun_add(ctx, "shutdown", 0, std_ui_shutdown);
+	std_set_map(ctx, NULL);
+	
 	std_set_map(ctx, "audio");
+	stdvar_add(ctx, "MAX_VOLUME",
+		make_number(MIX_MAX_VOLUME));
+	stdfun_add(ctx, "init", 0, std_audio_init);
+	stdfun_add(ctx, "set_volume", 1, std_audio_set_volume);
+	stdfun_add(ctx, "get_volume", 0, std_audio_get_volume);
+	stdfun_add(ctx, "load", 1, std_audio_load);
+	stdfun_add(ctx, "load_music", 1, std_audio_load_music);
+	stdfun_add(ctx, "play", 1, std_audio_play);
+	stdfun_add(ctx, "play_music", 1, std_audio_play_music);
+	stdfun_add(ctx, "shutdown", 0, std_audio_shutdown);
 	std_set_map(ctx, NULL);
 	#endif
 	
