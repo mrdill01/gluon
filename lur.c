@@ -19,19 +19,13 @@
 #include <unistd.h>
 #include <errno.h>
 
-#define LUR_INCLUDE_SDL 0
-
-#if LUR_INCLUDE_SDL
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_image.h>
-#include <SDL2/SDL_ttf.h>
-#include <SDL2/SDL_mixer.h>
-#endif
-
 #define LUR_VERSION "lur 1.0"
 #define LUR_VERSION_MAJ 1
 #define LUR_VERSION_MIN 0
 #define LUR_VERSION_PATCH 0
+
+#define LUR_REPL_GREETING \
+	"use 'help: \"all\"' to view the documentation."
 
 #define LUR_DEBUG_ASSERTS 1
 #define LUR_DEBUG_PRINT_CODE 0
@@ -41,7 +35,7 @@
 #define LUR_DEBUG_PRINT_TOKENS 0
 #define LUR_DEBUG_PRINT_ALLOCS 0
 #define LUR_DEBUG_PRINT_MEM_STATS 1
-#define LUR_DEBUG_DISABLE_GC 1
+#define LUR_DEBUG_DISABLE_GC 0
 
 #define lur_printf printf
 #define lur_eprintf printf
@@ -54,7 +48,7 @@
 #define INIT_ARRAY_CAP 8
 #define MAP_MAX_LOAD 0.75
 #define FIRST_GC_LIMIT (1024 * 1024)
-#define GC_GROW_FACTOR 2
+#define GC_GROWTH_FACTOR 2
 
 #define MAX_CODE SIZE_MAX
 #define MAX_DATA UINT16_MAX
@@ -66,7 +60,7 @@
 #define MAX_VREFS UINT8_MAX
 #define MAX_ARRAY_LIT_ITEMS UINT16_MAX
 #define MAX_MAP_LIT_ITEMS UINT16_MAX
-#define MAX_THREADS 8192
+#define MAX_THREADS 4096
 #define MAX_ERR_MSG 2048
 
 #define ERR_OUT_OF_MEMORY \
@@ -180,6 +174,9 @@
 
 typedef enum {
 	OP_NOP,
+	OP_NONE,
+	OP_FALSE,
+	OP_TRUE,
 	OP_DATA,
 	OP_NEWARRAY,
 	OP_NEWMAP,
@@ -224,11 +221,14 @@ typedef enum {
 
 typedef struct {
 	const char* name;
-	int args;
+	int len;
 } opinfo_t;
 
 static opinfo_t OPINFO[] = {
 	[OP_NOP] = {"nop", 0},
+	[OP_NONE] = {"none", 0},
+	[OP_FALSE] = {"false", 0},
+	[OP_TRUE] = {"true", 0},
 	[OP_DATA] = {"data", 2},
 	[OP_NEWARRAY] = {"newarray", 2},
 	[OP_NEWMAP] = {"newmap", 2},
@@ -279,8 +279,8 @@ typedef enum {
 	TYPE_ARRAY,
 	TYPE_MAP,
 	TYPE_FREF,
-	TYPE_FUNC,
 	TYPE_VREF,
+	TYPE_FUNC,
 } type_t;
 
 static const char* TYPE_NAMES[] = {
@@ -318,9 +318,6 @@ typedef struct {
 
 #define text_lit(chars, ctx) \
 	text_new((const uint8_t*)(chars), strlen(chars), ctx)
-	
-#define text_copy(text, ctx) \
-	text_new((text)->buffer, (text)->len, ctx)
 
 typedef struct {
 	obj_t obj;
@@ -340,23 +337,7 @@ typedef struct {
 	size_t cap;
 } map_t;
 
-typedef struct lur_t lur_t;
-typedef value_t (*syscall_fn_t)(value_t*, lur_t*);
-
-typedef struct {
-	obj_t obj;
-	uint8_t* code;
-	size_t ncode;
-	value_t* data;
-	size_t ndata;
-	int* lines;
-	size_t nlines;
-	size_t nvrefs;
-	const text_t* name;
-	const text_t* src;
-	uint8_t argc;
-	syscall_fn_t syscall;
-} func_t;
+typedef struct func_t func_t;
 
 typedef struct {
 	obj_t obj;
@@ -371,6 +352,24 @@ typedef struct vref_t {
 	value_t closed;
 	struct vref_t* next;
 } vref_t;
+
+typedef struct lur_t lur_t;
+typedef value_t (*syscall_fn_t)(value_t*, lur_t*);
+
+typedef struct func_t {
+	obj_t obj;
+	const text_t* name;
+	const text_t* src;
+	uint8_t argc;
+	syscall_fn_t syscall;
+	uint8_t* code;
+	size_t ncode;
+	value_t* data;
+	size_t ndata;
+	int* lines;
+	size_t nlines;
+	size_t nvrefs;
+} func_t;
 
 #define make_none() \
 	(value_t){TYPE_NONE, {.num = 0}}
@@ -835,71 +834,19 @@ typedef struct {
 	size_t memory_limit;
 } lur_config_t;
 
-#if LUR_INCLUDE_SDL
-
-typedef enum {
-	EVENT_QUIT,
-	EVENT_FINGER_DOWN,
-	EVENT_FINGER_UP,
-	EVENT_FINGER_MOTION,
-	MAX_EVENTS,
-} event_t;
-
-const char* EVENT_NAMES[] = {
-	[EVENT_QUIT] = "Quit",
-	[EVENT_FINGER_DOWN] = "FingerDown",
-	[EVENT_FINGER_UP] = "FingerUp",
-	[EVENT_FINGER_MOTION] = "FingerMotion",
-};
-
-typedef struct {
-	array_t* callbacks;
-	
-	uint64_t now;
-	uint64_t last;
-	double frame_time;
-	double total_time;
-} engine_t;
-
-#define MAX_TEXTURES 8192
-
-typedef struct {
-	SDL_Window* window;
-	SDL_Renderer* renderer;
-	int width;
-	int height;
-	SDL_Texture* texs[MAX_TEXTURES];
-} video_t;
-
-#define FONT_SIZE 26
-
-typedef struct {
-	TTF_Font* font;
-	SDL_Texture* button;
-	int x;
-	int y;
-	bool holding;
-} gui_t;
-
-#define MAX_SOUNDS 1024
-#define MAX_MUSIC 16
-
-typedef struct {
-	Mix_Chunk* sounds[MAX_SOUNDS];
-	Mix_Music* music[MAX_MUSIC];
-} audio_t;
-
-#endif
-
 typedef struct lur_t {
 	lur_config_t cfg;
 	comp_t cl;
 	vm_t vm;
 	size_t cur_vm;
 	mem_t mem;
+	
 	bool running;
 	bool interpreter;
+	
 	jmp_buf errjmp;
+	
+	map_t* help;
 	
 	map_t* std_map;
 	const char* std_map_name;
@@ -908,17 +855,9 @@ typedef struct lur_t {
 	array_t* thread_args;
 	value_t thread_retval;
 	
-	array_t* argv;
+	array_t* args;
+	
 	text_t* error_msg;
-	
-	fref_t* alloc_hook;
-	
-	#if LUR_INCLUDE_SDL
-	engine_t engine;
-	video_t video;
-	gui_t gui;
-	audio_t audio;
-	#endif
 } lur_t;
 
 static unsigned nextpow2(unsigned n) {
@@ -1047,8 +986,8 @@ static void* alloc(
 			ctx->mem.bytes + ns - os > ctx->cfg.memory_limit)
 			error(ctx, ERR_OUT_OF_MEMORY);
 		
-		if (ns > os && ctx->mem.bytes > ctx->mem.next_gc) {
-			ctx->mem.next_gc *= GC_GROW_FACTOR;
+		if (ns > os && ctx->mem.total > ctx->mem.next_gc) {
+			ctx->mem.next_gc *= GC_GROWTH_FACTOR;
 			gc_collect(ctx);
 		}
 	}
@@ -1059,18 +998,6 @@ static void* alloc(
 	}
 	
 	void* np = realloc(p, ns);
-	
-	if (ctx && ctx->alloc_hook) {
-		value_t args[] = {
-			make_text(text_fmt(ctx, "%p", p)),
-			make_text(text_fmt(ctx, "%p", np)),
-			make_number(os),
-			make_number(ns),
-			make_text(text_lit(func, ctx)),
-			make_number(line)};
-		lur_call_function(ctx, ctx->alloc_hook, args, 6);
-	}
-	
 	if (!np)
 		error(ctx, ERR_OUT_OF_MEMORY);
 	return np;
@@ -1133,6 +1060,11 @@ static text_t* text_new(
 	text->buffer[len] = '\0';
 	text->len = len;
 	return text;
+}
+
+static text_t* text_copy(const text_t* src, lur_t* ctx) {
+	assert(src && ctx);
+	return text_new(src->buffer, src->len, ctx);
 }
 
 static void text_free(text_t* text, lur_t* ctx) {
@@ -1207,6 +1139,17 @@ static text_t* text_slice(
 		ctx);
 	new_text->buffer[new_text->len] = '\0';
 	return new_text;
+}
+
+static text_t* text_repeat(
+	const text_t* text, size_t times, lur_t* ctx) {
+	assert(text);
+	gc_pause(ctx);
+	text_t* result = text_new(NULL, 0, ctx);
+	for (size_t i = 0; i < times; i++)
+		result = text_concat(result, text, ctx);
+	gc_resume(ctx);
+	return result;
 }
 
 static text_t* text_escape(const text_t* input, lur_t* ctx)
@@ -1396,13 +1339,22 @@ array_t* lur_new_num_array(
 	return array;
 }
 
-static array_t* array_copy(const array_t* src, lur_t* ctx) {
+static value_t value_copy(value_t, bool, lur_t*);
+static bool value_is_obj(value_t);
+
+static array_t* array_copy(
+	const array_t* src, bool deep, lur_t* ctx)
+{
 	assert(src && ctx);
 	gc_pause(ctx);
 	
 	array_t* dst = array_new(ctx);
-	for (size_t i = 0; i < src->len; i++)
-		array_push(dst, src->items[i], ctx);
+	for (size_t i = 0; i < src->len; i++) {
+		value_t item;
+		if (deep) item = value_copy(src->items[i], deep, ctx);
+		else item = src->items[i];
+		array_push(dst, item, ctx);
+	}
 		
 	gc_resume(ctx);
 	return dst;
@@ -1508,8 +1460,8 @@ static array_t* array_repeat(
 	assert(target && target > 0 && ctx);
 	gc_pause(ctx);
 	
-	array_t* array = array_copy(target, ctx);
-	for (size_t i = 0; i < times - 1; i++)
+	array_t* array = array_new(ctx);
+	for (size_t i = 0; i < times; i++)
 		array = array_concat(array, target, ctx);
 		
 	gc_resume(ctx);
@@ -1561,7 +1513,7 @@ static array_t* array_sort(
 	const array_t* input, fref_t* by, lur_t* ctx)
 {
 	assert(input && by && ctx);
-	array_t* sorted = array_copy(input, ctx);
+	array_t* sorted = array_copy(input, false, ctx);
 	if (sorted->len <= 1) return sorted;
 	array_sort_impl(sorted, sorted->len, by, ctx);
 	return sorted;
@@ -1611,7 +1563,7 @@ static array_t* array_rotate_left(
 	const array_t* input, size_t n, lur_t* ctx)
 {
 	assert(input && ctx);
-	array_t* array = array_copy(input, ctx);
+	array_t* array = array_copy(input, false, ctx);
 	for (size_t i = 0; i < n; i++) {
 		value_t temp = array->items[0];
 		for (size_t j = 0; j < array->len - 1; j++) {
@@ -1626,7 +1578,7 @@ static array_t* array_rotate_right(
 	const array_t* input, size_t n, lur_t* ctx)
 {
 	assert(input && ctx);
-	array_t* array = array_copy(input, ctx);
+	array_t* array = array_copy(input, false, ctx);
 	for (size_t i = 0; i < n; i++) {
 		value_t temp = array->items[array->len - 1];
 		for (int64_t j = array->len - 1; j >= 0; j--) {
@@ -1645,6 +1597,36 @@ static map_t* map_new(lur_t* ctx) {
 	map->len = 0;
 	map->cap = 0;
 	return map;
+}
+
+static bool map_set(map_t*, value_t, value_t, lur_t*);
+
+static map_t* map_copy(
+	const map_t* src, bool deep, lur_t* ctx)
+{
+	assert(src && ctx);
+	
+	gc_pause(ctx);
+	map_t* dst = map_new(ctx);
+	
+	for (size_t i = 0; i < src->cap; i++) {
+		const map_entry_t* entry = &src->entries[i];
+		if (entry->key.tag == TYPE_NONE) continue;
+		
+		value_t key, value;
+		if (deep) {
+			key = value_copy(entry->key, deep, ctx);
+			value = value_copy(entry->value, deep, ctx);
+		} else {
+			key = entry->key;
+			value = entry->value;
+		}
+		
+		map_set(dst, key, value, ctx);
+	}
+	
+	gc_resume(ctx);
+	return dst;
 }
 
 static void map_free(map_t* map, lur_t* ctx) {
@@ -1809,10 +1791,70 @@ static map_t* map_reverse(
 	return dst;
 }
 
+static fref_t* fref_new(const func_t* func, lur_t* ctx) {
+	assert(func && ctx);
+	fref_t* fref = (fref_t*)obj_new(
+		sizeof(fref_t), TYPE_FREF, ctx);
+	fref->func = func;
+	fref->vrefs = NULL;
+	arr_alloc(ctx, fref->vrefs, vref_t*, 0, func->nvrefs);
+	for (size_t i = 0; i < func->nvrefs; i++)
+		fref->vrefs[i] = NULL;
+	fref->nvrefs = func->nvrefs;
+	return fref;
+}
+
+static fref_t* fref_copy(
+	const fref_t* src, bool deep, lur_t* ctx)
+{
+	assert(src && ctx);
+	gc_pause(ctx);
+	
+	if (deep) {
+		// TODO: perform deep copy
+		fref_t* dst = fref_new(src->func, ctx);
+		dst->vrefs = src->vrefs;
+		dst->nvrefs = src->nvrefs;
+		gc_resume(ctx);
+		return dst;
+	}
+	
+	fref_t* dst = fref_new(src->func, ctx);
+	dst->vrefs = src->vrefs;
+	dst->nvrefs = src->nvrefs;
+	gc_resume(ctx);
+	return dst;
+}
+
+static void fref_free(fref_t* fref, lur_t* ctx) {
+	assert(fref && ctx);
+	arr_free(ctx, fref->vrefs, vref_t*, fref->nvrefs);
+	mem_free(ctx, fref, sizeof(fref_t));
+}
+
+static vref_t* vref_new(int index, lur_t* ctx) {
+	assert(ctx);
+	vref_t* vref = (vref_t*)obj_new(
+		sizeof(vref_t), TYPE_VREF, ctx);
+	vref->index = index;
+	vref->closed = make_none();
+	vref->next = NULL;
+	return vref;
+}
+
+static void vref_free(vref_t* vref, lur_t* ctx) {
+	assert(vref && ctx);
+	mem_free(ctx, vref, sizeof(vref_t));
+}
+
 static func_t* func_new(lur_t* ctx) {
 	assert(ctx);
 	func_t* func = (func_t*)obj_new(
 		sizeof(func_t), TYPE_FUNC, ctx);
+	func->name = NULL;
+	func->src = NULL;
+	func->argc = 0;
+	func->syscall = NULL;
 	func->code = NULL;
 	func->ncode = 0;
 	func->data = NULL;
@@ -1820,10 +1862,6 @@ static func_t* func_new(lur_t* ctx) {
 	func->lines = NULL;
 	func->nlines = 0;
 	func->nvrefs = 0;
-	func->name = NULL;
-	func->src = NULL;
-	func->argc = 0;
-	func->syscall = NULL;
 	return func;
 }
 
@@ -1892,40 +1930,6 @@ static size_t func_write_value(
 	return func->ndata - 1;
 }
 
-static fref_t* fref_new(const func_t* func, lur_t* ctx) {
-	assert(func && ctx);
-	fref_t* fref = (fref_t*)obj_new(
-		sizeof(fref_t), TYPE_FREF, ctx);
-	fref->func = func;
-	fref->vrefs = NULL;
-	arr_alloc(ctx, fref->vrefs, vref_t*, 0, func->nvrefs);
-	for (size_t i = 0; i < func->nvrefs; i++)
-		fref->vrefs[i] = NULL;
-	fref->nvrefs = func->nvrefs;
-	return fref;
-}
-
-static void fref_free(fref_t* fref, lur_t* ctx) {
-	assert(fref && ctx);
-	arr_free(ctx, fref->vrefs, vref_t*, fref->nvrefs);
-	mem_free(ctx, fref, sizeof(fref_t));
-}
-
-static vref_t* vref_new(int index, lur_t* ctx) {
-	assert(ctx);
-	vref_t* vref = (vref_t*)obj_new(
-		sizeof(vref_t), TYPE_VREF, ctx);
-	vref->index = index;
-	vref->closed = make_none();
-	vref->next = NULL;
-	return vref;
-}
-
-static void vref_free(vref_t* vref, lur_t* ctx) {
-	assert(vref && ctx);
-	mem_free(ctx, vref, sizeof(vref_t));
-}
-
 static const char* type_name(type_t type) {
 	switch (type) {
 	case TYPE_NONE:
@@ -1949,9 +1953,9 @@ static bool type_is_obj(type_t type) {
 	case TYPE_TEXT:
 	case TYPE_ARRAY:
 	case TYPE_MAP:
-	case TYPE_FUNC:
 	case TYPE_FREF:
-	case TYPE_VREF: return true;
+	case TYPE_VREF:
+	case TYPE_FUNC: return true;
 	default: unreachable();
 	}
 	
@@ -1977,9 +1981,9 @@ static text_t* value_to_text_ex(
 	}
 	case TYPE_NUMBER: {
 		double number = get_number(value);
-		if (trunc(number) == number) {
-			result = text_fmt(ctx, "%.16g", number);
-		} else
+		if (trunc(number) == number)
+			result = text_fmt(ctx, "%d", (long)number);
+		else
 			result = text_fmt(ctx, "%f", number);
 		break;
 	}
@@ -2132,9 +2136,14 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 		break;
 	}
 	case TYPE_NUMBER: {
+		result = text_fmt(ctx, "%d ", TYPE_NUMBER);
 		double number = get_number(value);
-		result = text_fmt(ctx, "%d %f ",
-			TYPE_NUMBER, number);
+		if (trunc(number) == number)
+			result = text_concat(result, text_fmt(ctx,
+				"%d ", (long)number), ctx);
+		else
+			result = text_concat(result, text_fmt(ctx,
+				"%f ", number), ctx);
 		break;
 	}
 	case TYPE_TEXT: {
@@ -2192,11 +2201,16 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 	case TYPE_FREF: {
 		const fref_t* fref = get_fref(value);
 		const func_t* func = fref->func;
-		result = text_fmt(ctx, "%d %ld %.*s ",
+		result = text_fmt(ctx, "%d %ld %.*s %d %ld ",
 			TYPE_FREF,
 			func->name->len,
 			(int)func->name->len,
-			func->name->buffer);
+			func->name->buffer,
+			func->argc,
+			(long)func->syscall);
+			
+		if (func->syscall)
+			break;
 		
 		result = text_concat(result,
 			text_fmt(ctx, "%d ", func->ncode), ctx);
@@ -2227,9 +2241,6 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 		for (size_t i = 0; i < func->nvrefs; i++)
 			result = text_concat(result,
 				value_serialize(make_vref(fref->vrefs[i]), ctx), ctx);
-		
-		result = text_concat(result, text_fmt(ctx,
-			"%d %ld ", func->argc, (long)func->syscall), ctx);
 		break;
 	}
 	case TYPE_VREF: {
@@ -2249,10 +2260,16 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 	return result;
 }
 
-static value_t deserialize(char* data, lur_t* ctx) {
+static value_t deserialize(
+	char* data, size_t offset, lur_t* ctx)
+{
 	const char* delim = " ";
-	int type = atoi(strtok(data, delim));
+	char* tok = strtok((offset == 0) ? data : NULL, delim);
+	int type = atoi(tok);
 	value_t value;
+	
+	#define get_token() \
+		(tok = strtok(NULL, delim), offset += strlen(tok), tok)
 	
 	switch (type) {
 	case TYPE_NONE: {
@@ -2260,18 +2277,21 @@ static value_t deserialize(char* data, lur_t* ctx) {
 		break;
 	}
 	case TYPE_BOOL: {
-		value = make_bool(atoi(strtok(NULL, delim)));
+		value = make_bool(atoi(get_token()));
 		break;
 	}
 	case TYPE_NUMBER: {
-		value = make_number(atof(strtok(NULL, delim)));
+		value = make_number(atof(get_token()));
 		break;
 	}
 	case TYPE_TEXT: {
-		long len = atol(strtok(NULL, delim));
+		long len = atol(get_token());
 		text_t* text = text_new(NULL, 0, ctx);
 		while (text->len < len) {
-			char* token = strtok(NULL, delim);
+			char* token = get_token();
+			if (data[offset] == ' ')
+				text_push(text, ' ', ctx);
+			
 			text = text_concat(text, text_lit(token, ctx), ctx);
 			if (text->len < len)
 				text_push(text, ' ', ctx);
@@ -2280,29 +2300,32 @@ static value_t deserialize(char* data, lur_t* ctx) {
 		break;
 	}
 	case TYPE_ARRAY: {
-		int len = atoi(strtok(NULL, delim));
+		int len = atoi(get_token());
 		array_t* array = array_new(ctx);
 		while (array->len < len)
-			array_push(array, deserialize(NULL, ctx), ctx);
+			array_push(array, deserialize(data, offset, ctx), ctx);
 		value = make_array(array);
 		break;
 	}
 	case TYPE_MAP: {
-		int len = atoi(strtok(NULL, delim));
+		int len = atoi(get_token());
 		map_t* map = map_new(ctx);
 		while (map->len < len) {
-			value_t key = deserialize(NULL, ctx);
-			value_t value = deserialize(NULL, ctx);
+			value_t key = deserialize(data, offset, ctx);
+			value_t value = deserialize(data, offset, ctx);
 			map_set(map, key, value, ctx);
 		}
 		value = make_map(map);
 		break;
 	}
 	case TYPE_FREF: {
-		long len = atol(strtok(NULL, delim));
+		long len = atol(get_token());
 		text_t* name = text_new(NULL, 0, ctx);
 		while (name->len < len) {
-			char* token = strtok(NULL, delim);
+			char* token = get_token();
+			if (data[offset] == ' ')
+				text_push(name, ' ', ctx);
+			
 			name = text_concat(name, text_lit(token, ctx), ctx);
 			if (name->len < len)
 				text_push(name, ' ', ctx);
@@ -2310,37 +2333,42 @@ static value_t deserialize(char* data, lur_t* ctx) {
 		
 		func_t* func = func_new(ctx);
 		func->name = name;
+		func->argc = atoi(get_token());
+		func->syscall = (syscall_fn_t)atol(get_token());
 		
-		len = atoi(strtok(NULL, delim));
+		if (func->syscall) {
+			value = make_fref(fref_new(func, ctx));
+			break;
+		}
+		
+		len = atoi(get_token());
 		for (size_t i = 0; i < len; i++)
-			func_write(func, atoi(strtok(NULL, delim)), 1, ctx);
+			func_write(func, atoi(get_token()), 1, ctx);
 		
-		len = atoi(strtok(NULL, delim));
+		len = atoi(get_token());
 		for (size_t i = 0; i < len; i++)
-			func_write_value(func, deserialize(NULL, ctx), ctx);
+			func_write_value(func,
+				deserialize(data, offset, ctx), ctx);
 		
-		func->nlines = atoi(strtok(NULL, delim));
+		func->nlines = atoi(get_token());
 		for (size_t i = 0; i < func->nlines; i++)
-			func->lines[i] = atoi(strtok(NULL, delim));
+			func->lines[i] = atoi(get_token());
 		
-		func->nvrefs = atoi(strtok(NULL, delim));
+		func->nvrefs = atoi(get_token());
 		fref_t* fref = fref_new(func, ctx);
 		fref->nvrefs = func->nvrefs;
-		for (size_t i = 0; i < func->nvrefs; i++)
+		for (size_t i = 0; i < fref->nvrefs; i++)
 			fref->vrefs[i] = get_vref(
-				deserialize(NULL, ctx));
-		
-		func->argc = atoi(strtok(NULL, delim));
-		func->syscall = (syscall_fn_t)atol(strtok(NULL, delim));
+				deserialize(data, offset, ctx));
 		
 		value = make_fref(fref);
 		break;
 	}
 	case TYPE_VREF: {
 		vref_t* vref = vref_new(
-			atol(strtok(NULL, delim)), ctx);
-		vref->closed = deserialize(NULL, ctx);
-		vref->next = (vref_t*)atol(strtok(NULL, delim));
+			atol(get_token()), ctx);
+		vref->closed = deserialize(data, offset, ctx);
+		vref->next = (vref_t*)atol(get_token());
 		value = make_vref(vref);
 		break;
 	}
@@ -2348,6 +2376,8 @@ static value_t deserialize(char* data, lur_t* ctx) {
 	}
 	
 	return value;
+	
+	#undef get_token
 }
 
 static value_t value_deserialize(
@@ -2355,9 +2385,37 @@ static value_t value_deserialize(
 {
 	assert(data);
 	gc_pause(ctx);
-	value_t result = deserialize((char*)data->buffer, ctx);
+	value_t result = deserialize(
+		(char*)data->buffer, 0, ctx);
 	gc_resume(ctx);
 	return result;
+}
+
+static value_t value_copy(
+	value_t value, bool deep, lur_t* ctx)
+{
+	switch (value.tag) {
+	case TYPE_NONE:
+	case TYPE_BOOL:
+	case TYPE_NUMBER: return value;
+	case TYPE_TEXT: {
+		const text_t* text = get_text(value);
+		return make_text(text_copy(text, ctx));
+	}
+	case TYPE_ARRAY: {
+		const array_t* array = get_array(value);
+		return make_array(array_copy(array, deep, ctx));
+	}
+	case TYPE_MAP: {
+		const map_t* map = get_map(value);
+		return make_map(map_copy(map, deep, ctx));
+	}
+	case TYPE_FREF: {
+		const fref_t* fref = get_fref(value);
+		return make_fref(fref_copy(fref, deep, ctx));
+	}
+	default: unreachable();
+	}
 }
 
 #define typecheck(value, t) \
@@ -2574,13 +2632,13 @@ static uint32_t value_hash(value_t value, lur_t* ctx) {
 		const text_t* text = value_to_text(value, ctx);
 		return value_hash(make_text(text), ctx);
 	}
-	case TYPE_FUNC: {
-		const func_t* func = get_func(value);
-		return value_hash(make_text(func->name), ctx);
-	}
 	case TYPE_FREF: {
 		const fref_t* fref = get_fref(value);
 		return value_hash(make_text(fref->func->name), ctx);
+	}
+	case TYPE_FUNC: {
+		const func_t* func = get_func(value);
+		return value_hash(make_text(func->name), ctx);
 	}
 	default: unreachable();
 	}
@@ -2624,13 +2682,6 @@ static void gc_deep_mark_obj(obj_t* obj, lur_t* ctx) {
 			}
 			break;
 		}
-		case TYPE_FUNC: {
-			func_t* func = (func_t*)obj;
-			gc_mark_obj((obj_t*)func->name, ctx);
-			for (size_t i = 0; i < func->ndata; i++)
-				gc_mark_value(func->data[i], ctx);
-			break;
-		}
 		case TYPE_FREF: {
 			fref_t* fref = (fref_t*)obj;
 			gc_mark_obj((obj_t*)fref->func, ctx);
@@ -2641,6 +2692,14 @@ static void gc_deep_mark_obj(obj_t* obj, lur_t* ctx) {
 		case TYPE_VREF: {
 			vref_t* vref = (vref_t*)obj;
 			gc_mark_value(vref->closed, ctx);
+			break;
+		}
+		case TYPE_FUNC: {
+			func_t* func = (func_t*)obj;
+			gc_mark_obj((obj_t*)func->name, ctx);
+			gc_mark_obj((obj_t*)func->src, ctx);
+			for (size_t i = 0; i < func->ndata; i++)
+				gc_mark_value(func->data[i], ctx);
 			break;
 		}
 		default: break;
@@ -2666,7 +2725,7 @@ static void gc_collect(lur_t* ctx) {
 	gc_sweep(ctx);
 	
 	ctx->mem.next_gc = ctx->mem.bytes *
-		GC_GROW_FACTOR;
+		GC_GROWTH_FACTOR;
 	ctx->mem.gc_cycles++;
 }
 
@@ -2694,11 +2753,11 @@ static void gc_mark(lur_t* ctx) {
 		gc_mark_value(entry->value, ctx);
 	}
 	
-	gc_mark_obj((obj_t*)ctx->argv, ctx);
-	for (int i = 0; i < ctx->argv->len; i++)
-		gc_mark_value(ctx->argv->items[i], ctx);
+	gc_mark_obj((obj_t*)ctx->args, ctx);
+	for (int i = 0; i < ctx->args->len; i++)
+		gc_mark_value(ctx->args->items[i], ctx);
 		
-	gc_mark_obj((obj_t*)ctx->alloc_hook, ctx);
+	gc_mark_obj((obj_t*)ctx->help, ctx);
 }
 
 static void gc_trace_refs(lur_t* ctx) {
@@ -2822,10 +2881,10 @@ static void dbg_print_opcode(const vm_t* vm) {
 		lur_dprintf("%04d     | %12s %02x",
 			addr, OPINFO[opcode].name, opcode);
 	
-	for (int i = 0; i < OPINFO[opcode].args; i++)
+	for (int i = 0; i < OPINFO[opcode].len; i++)
 		lur_dprintf(" %02x", vm->fp->ip[i + 1]);
 		
-	for (int i = 0; i < 3 - OPINFO[opcode].args; i++)
+	for (int i = 0; i < 3 - OPINFO[opcode].len; i++)
 		lur_dprintf("   ");
 	
 	uint16_t u16arg = vm->fp->ip[1] << 8 | vm->fp->ip[2];
@@ -3024,6 +3083,9 @@ static value_t vm_launch(
 		
 		switch (read_u8()) {
 		case OP_NOP: break;
+		case OP_NONE: push(make_none()); break;
+		case OP_FALSE: push(make_bool(false)); break;
+		case OP_TRUE: push(make_bool(true)); break;
 		case OP_DATA: {
 			push(vm->fp->func->data[read_u16()]);
 			break;
@@ -3361,6 +3423,7 @@ static void vm_call(
 	vm_t* vm, value_t value, uint8_t argc, bool returns)
 {
 	assert(vm);
+	
 	if (value.tag != TYPE_FREF)
 		error(vm->ctx,
 			ERR_NOT_CALLABLE(value, vm->ctx));
@@ -4207,6 +4270,16 @@ static void cl_patch_jump(comp_t* cl, size_t addr) {
 static void cl_push_value(comp_t* cl, value_t value) {
 	assert(cl);
 	
+	if (value.tag == TYPE_NONE) {
+		cl_write(cl, OP_NONE);
+		return;
+	}
+	
+	if (value.tag == TYPE_BOOL) {
+		cl_write(cl, (get_bool(value)) ? OP_TRUE : OP_FALSE);
+		return;
+	}
+	
 	if (value.tag == TYPE_FUNC) {
 		size_t slot = func_write_value(
 			cl->func, value, cl->ctx);
@@ -4781,7 +4854,7 @@ static void cl_compile(
 		
 		slot = func_write_value(
 			cl->func,
-			make_text(text_lit("print_ln", cl->ctx)),
+			make_text(text_lit("print", cl->ctx)),
 			cl->ctx);
 		cl_write(cl, OP_GETFIELD);
 		cl_write(cl, (slot >> 8) & 0xff);
@@ -4804,6 +4877,48 @@ static void cl_compile(
 			
 static text_t* io_read(const text_t*, lur_t*);
 
+#define STD_HELP_DOC \
+	"name\n" \
+	"shows help text for a function or variable. " \
+	"use 'help: \"all\"' to see all documentation."
+	
+static value_t std_help(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	const text_t* name = get_text(args[0]);
+	
+	if (text_eq(name, text_lit("all", ctx))) {
+		text_t* text = text_new(NULL, 0, ctx);
+		for (size_t i = 0; i < ctx->help->cap; i++) {
+			const map_entry_t* entry = &ctx->help->entries[i];
+			if (entry->key.tag == TYPE_NONE) continue;
+			text = text_concat(text,
+				text_fmt(ctx, "%s: %s\n\n",
+					get_text(entry->key)->buffer,
+					(entry->value.tag == TYPE_TEXT) ?
+						get_text(entry->value)->buffer :
+						text_lit("(no docs)", ctx)->buffer),
+				ctx);
+		}
+		return make_text(text);
+	}
+	
+	value_t help_text;
+	if (!map_get(ctx->help, args[0], &help_text, ctx))
+		return make_text(text_fmt(ctx,
+			"no associated docstring found for variable '%s'",
+			get_text(args[0])->buffer));
+	
+	return make_text(text_fmt(ctx, "%s: %s\n",
+			get_text(args[0])->buffer,
+			(help_text.tag == TYPE_TEXT) ?
+				get_text(help_text)->buffer :
+				text_lit("none", ctx)->buffer));
+}
+
+#define STD_LOAD_DOC \
+	"path\n" \
+	"loads and executes a script from a path."
+
 static value_t std_load(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	cl_init(&ctx->cl, ctx->cl.func->src, ctx);
@@ -4818,6 +4933,11 @@ static value_t std_load(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_EVAL_DOC \
+	"code\n" \
+	"evaluates some code from text, returns the codes " \
+	"return value."
+
 static value_t std_eval(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	cl_init(&ctx->cl, ctx->cl.func->src, ctx);
@@ -4830,11 +4950,69 @@ static value_t std_eval(value_t* args, lur_t* ctx) {
 	return result;
 }
 
+#define STD_ERROR_DOC \
+	"msg\nexits the interpreter with an error message."
+
 static value_t std_error(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	error(ctx, (const char*)get_text(args[0])->buffer);
 	return make_none();
 }
+
+#define STD_TYPE_OF_DOC \
+	"value\nreturns the type of a value."
+
+static value_t std_type_of(value_t* args, lur_t* ctx) {
+	return make_number(args[0].tag);
+}
+
+#define STD_DEFAULT_DOC \
+	"type\nreturns a default value for a given type."
+
+static value_t std_default(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	int64_t type = (int64_t)get_number(args[0]);
+	switch (type) {
+	case TYPE_NONE: return make_none();
+	case TYPE_BOOL: return make_bool(false);
+	case TYPE_NUMBER: return make_number(0);
+	case TYPE_TEXT: return make_text(text_lit("", ctx));
+	case TYPE_ARRAY: return make_array(array_new(ctx));
+	case TYPE_MAP: return make_map(map_new(ctx));
+	case TYPE_FREF: {
+		func_t* func = func_new(ctx);
+		func_write(func, OP_NONE, 1, ctx);
+		func_write(func, OP_RET, 1, ctx);
+		return make_fref(fref_new(func, ctx));
+	}
+	default: error(ctx, ERR_RANGE(0, TYPE_FREF, type));
+	}
+	
+	unreachable();
+	return make_none();
+}
+
+#define STD_SERIALIZE_DOC \
+	"value\nserializes the value into text."
+
+static value_t std_serialize(
+	value_t* args, lur_t* ctx)
+{
+	return make_text(value_serialize(args[0], ctx));
+}
+
+#define STD_DESERIALIZE_DOC \
+	"data\nreturns a value decoded from serialized data."
+
+static value_t std_deserialize(
+	value_t* args, lur_t* ctx)
+{
+	typecheck(0, TYPE_TEXT);
+	return value_deserialize(get_text(args[0]), ctx);
+}
+
+#define STD_AS_NUMBER_DOC \
+	"value\nreturns value converted into a number."
 
 static value_t std_as_number(value_t* args, lur_t* ctx) {
 	switch (args[0].tag) {
@@ -4853,9 +5031,16 @@ static value_t std_as_number(value_t* args, lur_t* ctx) {
 	return make_number(0);
 }
 
+#define STD_AS_TEXT_DOC \
+	"value\nreturns value converted into text."
+
 static value_t std_as_text(value_t* args, lur_t* ctx) {
 	return make_text(value_to_text(args[0], ctx));
 }
+
+#define STD_LOOP_DOC \
+	"n, fn\ncreates a loop that calls the function fn n "  \
+	"times with the current index as argument ."
 
 static value_t std_loop(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -4870,6 +5055,9 @@ static value_t std_loop(value_t* args, lur_t* ctx) {
 	
 	return make_none();
 }
+
+#define STD_WHILE_DOC \
+	"fn\ncalls the function fn repeatedly until it returns false."
 
 static value_t std_while(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_FREF);
@@ -4889,6 +5077,10 @@ static value_t std_while(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_RANGE_DOC \
+	"start, end\ncreates an array containing values from " \
+	"start until end (exclusive)"
+
 static value_t std_range(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -4904,6 +5096,10 @@ static value_t std_range(value_t* args, lur_t* ctx) {
 	return make_array(array);
 }
 
+#define STD_RANGE_INC_DOC \
+	"start, end\ncreates an array containing values from " \
+	"start until and including end (inclusive)"
+
 static value_t std_range_inc(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -4918,6 +5114,9 @@ static value_t std_range_inc(value_t* args, lur_t* ctx) {
 			array_push(array, make_number(i), ctx);
 	return make_array(array);
 }
+
+#define STD_DEFAULT_SORT_DOC \
+	"a, b\ndefault sorting function, used by array.sort."
 
 static value_t std_default_sort(value_t* args, lur_t* ctx) {
 	value_t a = args[0];
@@ -4936,6 +5135,10 @@ static value_t std_default_sort(value_t* args, lur_t* ctx) {
 	return a;
 }
 
+#define STD_ENUM_DOC \
+	"names\ntakes an array of enum discriminator names " \
+	"and returns a map mapping the names to numbers."
+
 static value_t std_enum(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
@@ -4950,11 +5153,79 @@ static value_t std_enum(value_t* args, lur_t* ctx) {
 	return make_map(enum_);
 }
 
+#define STD_ASSERT_DOC \
+	"condition\nasserts that condition is true, otherwise " \
+	"halts with an error message."
+
 static value_t std_assert(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_BOOL);
 	if (!get_bool(args[0])) error(ctx, ERR_ASSERTION);
 	return make_none();
 }
+
+static size_t mem_total_ram(void) {
+	struct sysinfo info;
+	sysinfo(&info);
+	return info.totalram;
+}
+
+static size_t mem_free_ram(void) {
+	struct sysinfo info;
+	sysinfo(&info);
+	return info.freeram;
+}
+
+#define STD_MEM_ADDR_DOC \
+	"value\n" \
+	"returns the pointer address in host memory of an " \
+	"object, or the text 'stack' if the value is not an object type"
+
+static value_t std_mem_addr(value_t* args, lur_t* ctx) {
+	if (!type_is_obj(args[0].tag))
+		return make_text(text_lit("stack", ctx));
+	return make_text(text_fmt(ctx, "%p", args[0].data.obj));
+}
+
+#define STD_MEM_COPY_DOC \
+	"value\n" \
+	"returns a copied version of the value with a new " \
+	"address."
+
+static value_t std_mem_copy(value_t* args, lur_t* ctx) {
+	return value_copy(args[0], false, ctx);
+}
+
+#define STD_MEM_DEEP_COPY_DOC \
+	"value\n" \
+	"returns a deep copied version of the value with a new " \
+	"address."
+
+static value_t std_mem_deep_copy(
+	value_t* args, lur_t* ctx)
+{
+	return value_copy(args[0], true, ctx);
+}
+
+#define STD_MEM_TOTAL_RAM_DOC \
+	"returns the total number of bytes of ram available."
+
+static value_t std_mem_total_ram(
+	value_t* args, lur_t* ctx)
+{
+	return make_number(mem_total_ram());
+}
+
+#define STD_MEM_FREE_RAM_DOC \
+	"returns the number of bytes of free ram available."
+
+static value_t std_mem_free_ram(
+	value_t* args, lur_t* ctx)
+{
+	return make_number(mem_free_ram());
+}
+
+#define STD_TIME_NOW_DOC \
+	"returns the current time and date as text."
 
 static value_t std_time_now(value_t* args, lur_t* ctx) {
 	time_t current_time;
@@ -4963,11 +5234,17 @@ static value_t std_time_now(value_t* args, lur_t* ctx) {
 	return make_text(text_lit(str, ctx));
 }
 
+#define STD_TIME_YEAR_DOC \
+	"returns the current year."
+
 static value_t std_time_year(value_t* args, lur_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_year + 1900);
 }
+
+#define STD_TIME_MONTH_DOC \
+	"returns the current month."
 
 static value_t std_time_month(value_t* args, lur_t* ctx) {
 	time_t now = time(NULL);
@@ -4975,11 +5252,17 @@ static value_t std_time_month(value_t* args, lur_t* ctx) {
 	return make_number(t->tm_mon + 1);
 }
 
+#define STD_TIME_DAY_DOC \
+	"returns the current day."
+
 static value_t std_time_day(value_t* args, lur_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_mday);
 }
+
+#define STD_TIME_HOUR_DOC \
+	"returns the current hour."
 
 static value_t std_time_hour(value_t* args, lur_t* ctx) {
 	time_t now = time(NULL);
@@ -4987,11 +5270,17 @@ static value_t std_time_hour(value_t* args, lur_t* ctx) {
 	return make_number(t->tm_hour);
 }
 
+#define STD_TIME_MINUTE_DOC \
+	"returns the current minute."
+
 static value_t std_time_minute(value_t* args, lur_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_min);
 }
+
+#define STD_TIME_SECOND_DOC \
+	"returns the current second."
 
 static value_t std_time_second(value_t* args, lur_t* ctx) {
 	time_t now = time(NULL);
@@ -4999,16 +5288,26 @@ static value_t std_time_second(value_t* args, lur_t* ctx) {
 	return make_number(t->tm_sec);
 }
 
+#define STD_TIME_TIMESTAMP_DOC \
+	"returns a timestamp measured in seconds."
+
 static value_t std_time_timestamp(
 	value_t* args, lur_t* ctx)
 {
 	return make_number(time(NULL));
 }
 
+#define STD_TIME_CLOCK_DOC \
+	"returns the CPU clock time in seconds."
+
 static value_t std_time_clock(value_t* args, lur_t* ctx) {
 	return make_number((double)clock() /
 		CLOCKS_PER_SEC);
 }
+
+#define STD_TIME_SLEEP_DOC \
+	"seconds\nsleeps the current thread for x amount of " \
+	"seconds."
 
 static value_t std_time_sleep(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5035,24 +5334,15 @@ static const char* system_get_platform(void) {
     #endif
 }
 
+#define STD_SYSTEM_UPTIME_DOC \
+	"returns the system uptime."
+
 static value_t std_system_uptime(
 	value_t* args, lur_t* ctx)
 {
 	struct sysinfo info;
 	sysinfo(&info);
 	return make_number(info.uptime);
-}
-
-static size_t system_total_ram(void) {
-	struct sysinfo info;
-	sysinfo(&info);
-	return info.totalram;
-}
-
-static size_t system_free_ram(void) {
-	struct sysinfo info;
-	sysinfo(&info);
-	return info.freeram;
 }
 
 static size_t system_average_load(void) {
@@ -5062,23 +5352,17 @@ static size_t system_average_load(void) {
 	return info.loads[0] * factor;
 }
 
-static value_t std_system_total_ram(
-	value_t* args, lur_t* ctx)
-{
-	return make_number(system_total_ram());
-}
-
-static value_t std_system_free_ram(
-	value_t* args, lur_t* ctx)
-{
-	return make_number(system_free_ram());
-}
+#define STD_SYSTEM_AVERAGE_LOAD_DOC \
+	"returns the average load over the last minute."
 
 static value_t std_system_average_load(
 	value_t* args, lur_t* ctx)
 {
 	return make_number(system_average_load());
 }
+
+#define STD_SYSTEM_PROCESS_COUNT_DOC \
+	"returns the current process count."
 
 static value_t std_system_process_count(
 	value_t* args, lur_t* ctx)
@@ -5088,11 +5372,17 @@ static value_t std_system_process_count(
 	return make_number(info.procs);
 }
 
+#define STD_SYSTEM_CMD_DOC \
+	"cmd\nruns a command."
+
 static value_t std_system_cmd(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	system((const char*)get_text(args[0])->buffer);
 	return make_none();
 }
+
+#define STD_SYSTEM_EXIT_DOC \
+	"code\nexits the interpreter with an exit code."
 
 static value_t std_system_exit(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5103,6 +5393,10 @@ static double math_rand(double start, double end) {
 	double scale = rand() / (double)RAND_MAX;
 	return start + scale * (end - start);
 }
+
+#define STD_MATH_EQF_DOC \
+	"a, b, epsilon\ncompares two numbers with a " \
+	"tolerance of epsilon."
 
 static value_t std_math_eqf(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5115,6 +5409,9 @@ static value_t std_math_eqf(value_t* args, lur_t* ctx) {
 	else return make_bool(fabs(a - b) < eps);
 }
 
+#define STD_MATH_BIT_SHL_DOC \
+	"a, b\nbitshifts a b positions to the left."
+
 static value_t std_math_bit_shl(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -5122,6 +5419,9 @@ static value_t std_math_bit_shl(value_t* args, lur_t* ctx) {
 	uint64_t b = (uint64_t)get_number(args[1]);
 	return make_number(a << b);
 }
+
+#define STD_MATH_BIT_SHR_DOC \
+	"a, b\nbitshifts a b positions to the right."
 
 static value_t std_math_bit_shr(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5131,6 +5431,9 @@ static value_t std_math_bit_shr(value_t* args, lur_t* ctx) {
 	return make_number(a >> b);
 }
 
+#define STD_MATH_BIT_AND_DOC \
+	"a, b\nperforms a bitwise AND between a and b."
+
 static value_t std_math_bit_and(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -5138,6 +5441,9 @@ static value_t std_math_bit_and(value_t* args, lur_t* ctx) {
 	uint64_t b = (uint64_t)get_number(args[1]);
 	return make_number(a & b);
 }
+
+#define STD_MATH_BIT_OR_DOC \
+	"a, b\nperforms a bitwise OR between a and b."
 
 static value_t std_math_bit_or(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5147,6 +5453,9 @@ static value_t std_math_bit_or(value_t* args, lur_t* ctx) {
 	return make_number(a | b);
 }
 
+#define STD_MATH_BIT_XOR_DOC \
+	"a, b\nperforms a bitwise XOR between a and b."
+
 static value_t std_math_bit_xor(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -5155,11 +5464,18 @@ static value_t std_math_bit_xor(value_t* args, lur_t* ctx) {
 	return make_number(a ^ b);
 }
 
+#define STD_MATH_BIT_NOT_DOC \
+	"x\nperforms a bitwise NOT on x."
+
 static value_t std_math_bit_not(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(
 		~((int64_t)get_number(args[0])));
 }
+
+#define STD_MATH_LOG_DOC \
+	"target, base\nreturns the number needed to raise " \
+	"base to target."
 
 static value_t std_math_log(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5169,10 +5485,16 @@ static value_t std_math_log(value_t* args, lur_t* ctx) {
 	return make_number(log(target) / log(base));
 }
 
+#define STD_MATH_SQRT_DOC \
+	"x\nreturns the square root of x."
+
 static value_t std_math_sqrt(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(sqrt(get_number(args[0])));
 }
+
+#define STD_MATH_SQUARED_DOC \
+	"x\nreturns x * x."
 
 static value_t std_math_squared(
 	value_t* args, lur_t* ctx)
@@ -5182,10 +5504,16 @@ static value_t std_math_squared(
 	return make_number(x * x);
 }
 
+#define STD_MATH_ABS_DOC \
+	"x\nreturns the absolute (positive) value of x."
+
 static value_t std_math_abs(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(fabs(get_number(args[0])));
 }
+
+#define STD_MATH_MIN_DOC \
+	"a, b\nreturns the smaller value of a and b."
 
 static value_t std_math_min(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5195,6 +5523,9 @@ static value_t std_math_min(value_t* args, lur_t* ctx) {
 	return make_number((a < b) ? a : b);
 }
 
+#define STD_MATH_MAX_DOC \
+	"a, b\nreturns the larger value of a and b."
+
 static value_t std_math_max(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -5202,6 +5533,9 @@ static value_t std_math_max(value_t* args, lur_t* ctx) {
 	double b = get_number(args[1]);
 	return make_number((a > b) ? a : b);
 }
+
+#define STD_MATH_CLIP_DOC \
+	"x, lo, hi\nclamps x between lo and hi."
 
 static value_t std_math_clip(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5213,6 +5547,9 @@ static value_t std_math_clip(value_t* args, lur_t* ctx) {
 	return make_number((x < lo) ? lo : (x > hi) ? hi : x);
 }
 
+#define STD_MATH_LERP_DOC \
+	"t, a, b\nlinearly interpolates between a and b based on t."
+
 static value_t std_math_lerp(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -5222,6 +5559,10 @@ static value_t std_math_lerp(value_t* args, lur_t* ctx) {
 	double b = get_number(args[2]);
 	return make_number(a * (1.0 - t) + b * t);
 }
+
+#define STD_MATH_INTERP_TO_DOC \
+	"current, target, speed, dt\ninterpolates current " \
+	"towards target based on speed and dt."
 
 static value_t std_math_interp_to(
 	value_t* args, lur_t* ctx)
@@ -5240,20 +5581,32 @@ static value_t std_math_interp_to(
 			current + (target - current) * (speed * dt));
 }
 
+#define STD_MATH_FLOOR_DOC \
+	"x\nrounds towards -inf."
+
 static value_t std_math_floor(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(floor(get_number(args[0])));
 }
+
+#define STD_MATH_CEIL_DOC \
+	"x\nrounds towards +inf."
 
 static value_t std_math_ceil(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(ceil(get_number(args[0])));
 }
 
+#define STD_MATH_ROUND_DOC \
+	"x\nrounds x to the nearest integer."
+
 static value_t std_math_round(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(round(get_number(args[0])));
 }
+
+#define STD_MATH_RAD_DOC \
+	"x\nconverts degrees to radians."
 
 static value_t std_math_rad(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5261,41 +5614,65 @@ static value_t std_math_rad(value_t* args, lur_t* ctx) {
 		get_number(args[0]) * (M_PI / 180.0));
 }
 
+#define STD_MATH_DEG_DOC \
+	"x\nconverts radians to degrees."
+
 static value_t std_math_deg(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(
 		get_number(args[0]) * (180.0 / M_PI));
 }
 
+#define STD_MATH_SIN_DOC \
+	"x\nreturns the sine of x."
+
 static value_t std_math_sin(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(sin(get_number(args[0])));
 }
+
+#define STD_MATH_COS_DOC \
+	"x\nreturns the cosine of x."
 
 static value_t std_math_cos(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(cos(get_number(args[0])));
 }
 
+#define STD_MATH_TAN_DOC \
+	"x\nreturns the tangent of x."
+
 static value_t std_math_tan(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(tan(get_number(args[0])));
 }
+
+#define STD_MATH_ASIN_DOC \
+	"x\nreturns the arcsine of x."
 
 static value_t std_math_asin(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(asin(get_number(args[0])));
 }
 
+#define STD_MATH_ACOS_DOC \
+	"x\nreturns the arccosine of x."
+
 static value_t std_math_acos(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(acos(get_number(args[0])));
 }
 
+#define STD_MATH_ATAN_DOC \
+	"x\nreturns the arctangent of x."
+
 static value_t std_math_atan(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(atan(get_number(args[0])));
 }
+
+#define STD_MATH_ATAN2_DOC \
+	"x, y\ntwo argument arctangent."
 
 static value_t std_math_atan2(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5305,35 +5682,56 @@ static value_t std_math_atan2(value_t* args, lur_t* ctx) {
 	return make_number(atan2(x, y));
 }
 
+#define STD_MATH_SINH_DOC \
+	"x\nreturns the hyperbolic sine of x."
+
 static value_t std_math_sinh(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(sinh(get_number(args[0])));
 }
+
+#define STD_MATH_COSH_DOC \
+	"x\nreturns the hyperbolic cosine of x."
 
 static value_t std_math_cosh(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(cosh(get_number(args[0])));
 }
 
+#define STD_MATH_TANH_DOC \
+	"x\nreturns the hyperbolic tangent of x."
+
 static value_t std_math_tanh(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(tanh(get_number(args[0])));
 }
+
+#define STD_MATH_ASINH_DOC \
+	"x\nreturns the hyperbolic arcsine of x."
 
 static value_t std_math_asinh(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(asinh(get_number(args[0])));
 }
 
+#define STD_MATH_ACOSH_DOC \
+	"x\nreturns the hyperbolic arccosine of x."
+
 static value_t std_math_acosh(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(acosh(get_number(args[0])));
 }
 
+#define STD_MATH_ATANH_DOC \
+	"x\nreturns the hyperbolic arctangent of x."
+
 static value_t std_math_atanh(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(atanh(get_number(args[0])));
 }
+
+#define STD_MATH_IS_EVEN_DOC \
+	"x\nreturns true if x is even."
 
 static value_t std_math_is_even(value_t* args, lur_t* ctx)  {
 	typecheck(0, TYPE_NUMBER);
@@ -5341,11 +5739,17 @@ static value_t std_math_is_even(value_t* args, lur_t* ctx)  {
 		get_number(args[0]), 2.0) == 0.0);
 }
 
+#define STD_MATH_IS_ODD_DOC \
+	"x\nreturns true if x is odd."
+
 static value_t std_math_is_odd(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_bool(fmod(
 		get_number(args[0]), 2.0) != 0.0);
 }
+
+#define STD_MATH_IS_PRIME_DOC \
+	"x\nreturns true if x is prime."
 
 static value_t std_math_is_prime(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5358,15 +5762,17 @@ static value_t std_math_is_prime(value_t* args, lur_t* ctx) {
 	return make_bool(true);
 }
 
+#define STD_MATH_HEX_DOC \
+	"x\nreturns x as a hexidecimal string."
+
 static value_t std_math_hex(value_t* args, lur_t* ctx) {
-	if (type_is_obj(args[0].tag))
-		return make_text(text_fmt(
-			ctx, "%p", args[0].data.obj));
-	
 	typecheck(0, TYPE_NUMBER);
 	return make_text(text_fmt(
 		ctx, "0x%x", (int64_t)get_number(args[0])));
 }
+
+#define STD_MATH_BIN_DOC \
+	"x\nreturns x as a binary string."
 
 static value_t std_math_bin(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5382,9 +5788,15 @@ static value_t std_math_bin(value_t* args, lur_t* ctx) {
 	return make_text(text);
 }
 
+#define STD_MATH_HASH_DOC \
+	"value\nreturns the FNV-1a hash of the value."
+
 static value_t std_math_hash(value_t* args, lur_t* ctx) {
 	return make_number(value_hash(args[0], ctx));
 }
+
+#define STD_VEC_SIZE_DOC \
+	"v\nreturns the magnitude of v."
 
 static value_t std_vec_size(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5403,10 +5815,13 @@ static value_t std_vec_size(value_t* args, lur_t* ctx) {
 	return make_number(sqrt(size));
 }
 
+#define STD_VEC_NORM_DOC \
+	"v\nreturns a normalized copy of v."
+
 static value_t std_vec_norm(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* vec = get_array(args[0]);
-	array_t* out = array_copy(vec, ctx);
+	array_t* out = array_copy(vec, false, ctx);
 	
 	double size = 0.0;
 	for (size_t i = 0; i < vec->len; i++) {
@@ -5429,6 +5844,9 @@ static value_t std_vec_norm(value_t* args, lur_t* ctx) {
 	
 	return make_array(out);
 }
+
+#define STD_VEC_DOT_DOC \
+	"v1, v2\nreturns the dot product of v1 and v2."
 
 static value_t std_vec_dot(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5453,6 +5871,9 @@ static value_t std_vec_dot(value_t* args, lur_t* ctx) {
 	
 	return make_number(dot);
 }
+
+#define STD_VEC_CROSS_DOC \
+	"v1, v2\nreturns the cross product of v1 and v2."
 
 static value_t std_vec_cross(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5493,22 +5914,27 @@ static value_t std_vec_cross(value_t* args, lur_t* ctx) {
 	return make_array(out);
 }
 
+#define STD_VEC_INTERP_TO_DOC \
+	"v1, v2, speed, dt\ninterpolates v1 towards v2 based on " \
+	"speed and dt."
+
 static value_t std_vec_interp_to(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_ARRAY);
 	typecheck(2, TYPE_NUMBER);
 	typecheck(3, TYPE_NUMBER);
 	
-	const array_t* a = get_array(args[0]);
-	const array_t* b = get_array(args[1]);
+	const array_t* v1 = get_array(args[0]);
+	const array_t* v2 = get_array(args[1]);
 	double speed = get_number(args[2]);
 	double dt = get_number(args[3]);
 	
 	array_t* ret = array_new(ctx);
-	size_t shortest = (a->len < b->len) ? a->len : b->len;
+	size_t shortest = (v1->len < v2->len) ? v1->len : v2->len;
 	for (size_t i = 0; i < shortest; i++) {
-		double current = get_number(a->items[i]);
-		double target = get_number(b->items[i]);
+		// TODO: typecheck
+		double current = get_number(v1->items[i]);
+		double target = get_number(v2->items[i]);
 		array_push(ret, make_number(
 			current + (target - current) * (speed * dt)),
 			ctx);
@@ -5517,11 +5943,17 @@ static value_t std_vec_interp_to(value_t* args, lur_t* ctx) {
 	return make_array(ret);
 }
 
+#define STD_RAND_SEED_DOC \
+	"seed\nseeds the random number generator."
+
 static value_t std_rand_seed(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	srand(get_number(args[0]));
 	return make_none();
 }
+
+#define STD_RAND_NUMBER_DOC \
+	"min, max\nreturns a random number between a and b."
 
 static value_t std_rand_number(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5530,6 +5962,10 @@ static value_t std_rand_number(value_t* args, lur_t* ctx) {
 		get_number(args[0]),
 		get_number(args[1])));
 }
+
+#define STD_RAND_TEXT_DOC \
+	"len, charset\ngenerates a random string of characters " \
+	"from charset len characters long."
 
 static value_t std_rand_text(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5545,16 +5981,25 @@ static value_t std_rand_text(value_t* args, lur_t* ctx) {
 	return make_text(text);
 }
 
+#define STD_RAND_ITEM_DOC \
+	"array\nreturns a random item from the array."
+
 static value_t std_rand_item(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
 	return array->items[(size_t)math_rand(0, array->len)];
 }
 
+#define STD_TEXT_LEN_DOC \
+	"text\nreturns the length of the text."
+
 static value_t std_text_len(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	return make_number(get_text(args[0])->len);
 }
+
+#define STD_TEXT_CMP_DOC \
+	"a, b\nreturns the alphabetically superior of a and b."
 
 static value_t std_text_cmp(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -5564,15 +6009,22 @@ static value_t std_text_cmp(value_t* args, lur_t* ctx) {
 	return make_text(text_cmp(a, b));
 }
 
+#define STD_TEXT_BYTES_DOC \
+	"text\nreturns an array containing the characters that " \
+	"make up a string."
+
 static value_t std_text_bytes(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
 	array_t* bytes = array_new(ctx);
 	for (size_t i = 0; i < text->len; i++)
 		array_push(bytes, make_text(text_new(
-			text->buffer + i, 1, ctx)), ctx);
+			text->buffer[i], 1, ctx)), ctx);
 	return make_array(bytes);
 }
+
+#define STD_TEXT_ASCII_DOC \
+	"text\nreturns an array containing the ASCII of a string."
 
 static value_t std_text_ascii(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -5583,10 +6035,15 @@ static value_t std_text_ascii(value_t* args, lur_t* ctx) {
 	return make_array(ascii);
 }
 
+#define STD_TEXT_WORDS_DOC \
+	"text delim\nsplits the text into words based on an " \	
+	"delimiter."
+
 static value_t std_text_words(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	const text_t* input = get_text(args[0]);
+	// TODO: make sep an array
 	const text_t* sep = get_text(args[1]);
 	
 	array_t* parts = array_new(ctx);
@@ -5614,6 +6071,10 @@ static value_t std_text_words(value_t* args, lur_t* ctx) {
 	return make_array(parts);
 }
 
+#define STD_TEXT_SLICE_DOC \
+	"text, start, end\nreturns a substring based on indices " \
+	"start and end."
+
 static value_t std_text_slice(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_NUMBER);
@@ -5635,6 +6096,19 @@ static value_t std_text_slice(value_t* args, lur_t* ctx) {
 	return make_text(text_slice(text, start, end, ctx));
 }
 
+#define STD_TEXT_REPEAT_DOC \
+	"text, n\nrepeats text n times."
+
+static value_t std_text_repeat(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	typecheck(1, TYPE_NUMBER);
+	return make_text(text_repeat(get_text(args[0]),
+		(size_t)get_number(args[1]), ctx));
+}
+
+#define STD_TEXT_AS_UPPER_DOC \
+	"text\nreturns text converted to uppercase."
+
 static value_t std_text_as_upper(
 	value_t* args, lur_t* ctx) 
 {
@@ -5645,6 +6119,9 @@ static value_t std_text_as_upper(
 		text->buffer[i] = toupper(original->buffer[i]);
 	return make_text(text);
 }
+
+#define STD_TEXT_AS_LOWER_DOC \
+	"text\nreturns text converted to lowercase."
 
 static value_t std_text_as_lower(
 	value_t* args, lur_t* ctx) 
@@ -5657,6 +6134,9 @@ static value_t std_text_as_lower(
 	return make_text(text);
 }
 
+#define STD_TEXT_IS_LOWER_DOC \
+	"text\nreturns true if the text is entirely lowercase."
+
 static value_t std_text_is_lower(
 	value_t* args, lur_t* ctx) 
 {
@@ -5668,6 +6148,9 @@ static value_t std_text_is_lower(
 	return make_bool(true);
 }
 
+#define STD_TEXT_IS_UPPER_DOC \
+	"text\nreturns true if the text is entirely uppercase."
+
 static value_t std_text_is_upper(
 	value_t* args, lur_t* ctx) 
 {
@@ -5678,6 +6161,9 @@ static value_t std_text_is_upper(
 			return make_bool(false);
 	return make_bool(true);
 }
+
+#define STD_TEXT_STARTS_WITH_DOC \
+	"text, start\nreturns true if text starts with start."
 
 static value_t std_text_starts_with(
 	value_t* args, lur_t* ctx)
@@ -5693,6 +6179,9 @@ static value_t std_text_starts_with(
 			
 	return make_bool(true);
 }
+
+#define STD_TEXT_ENDS_WITH_DOC \
+	"text, end\nreturns true if text ends with end."
 
 static value_t std_text_ends_with(
 	value_t* args, lur_t* ctx)
@@ -5710,6 +6199,9 @@ static value_t std_text_ends_with(
 	return make_bool(true);
 }
 
+#define STD_TEXT_TRIM_LEFT_DOC \
+	"text\nstrips whitespace off the start of the text."
+
 static value_t std_text_trim_left(
 	value_t* args, lur_t* ctx)
 {
@@ -5724,6 +6216,9 @@ static value_t std_text_trim_left(
 	return make_text(text_new(
 		cur, strlen((const char*)cur), ctx));
 }
+
+#define STD_TEXT_TRIM_RIGHT_DOC \
+	"text\nstrips whitespace off the end of the text."
 
 static value_t std_text_trim_right(
 	value_t* args, lur_t* ctx)
@@ -5740,6 +6235,9 @@ static value_t std_text_trim_right(
 	return make_text(text_new(text->buffer, len, ctx));
 }
 
+#define STD_TEXT_TRIM_DOC \
+	"text\nstrips whitespace off both ends of the text."
+
 static value_t std_text_trim(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	value_t text = args[0];
@@ -5747,6 +6245,10 @@ static value_t std_text_trim(value_t* args, lur_t* ctx) {
 	text = std_text_trim_right(&text, ctx);
 	return text;
 }
+
+#define STD_TEXT_LEFT_PAD_DOC \
+	"text, width, pattern\npads the left side of the text so " \
+	"that it is width characters long."
 
 static value_t std_text_left_pad(
 	value_t* args, lur_t* ctx)
@@ -5765,6 +6267,10 @@ static value_t std_text_left_pad(
 	return make_text(text);
 }
 
+#define STD_TEXT_RIGHT_PAD_DOC \
+	"text, width, pattern\npads the right side of the text so " \
+	"that it is width characters long."
+
 static value_t std_text_right_pad(
 	value_t* args, lur_t* ctx)
 {
@@ -5781,6 +6287,10 @@ static value_t std_text_right_pad(
 	
 	return make_text(text);
 }
+
+#define STD_TEXT_PAD_DOC \
+	"text, width, pattern\npads the center of the text so " \
+	"that it is width characters long."
 
 static value_t std_text_pad(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -5800,6 +6310,10 @@ static value_t std_text_pad(value_t* args, lur_t* ctx) {
 	return make_text(text);
 }
 
+#define STD_TEXT_FIND_DOC \
+	"text, find, start\nfinds the text find within the text after " \
+	"position start."
+
 static value_t std_text_find(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
@@ -5810,6 +6324,10 @@ static value_t std_text_find(value_t* args, lur_t* ctx) {
 		get_number(args[2]));
 	return (pos == -1) ? make_none() : make_number(pos);
 }
+
+#define STD_TEXT_REPLACE_ALL_DOC \
+	"text, find, with\nreplaces all occurences of find within " \
+	"text with with."
 
 static value_t std_text_replace_all(value_t* args, lur_t* ctx)
 {
@@ -5823,6 +6341,9 @@ static value_t std_text_replace_all(value_t* args, lur_t* ctx)
 		text, find, rep, ctx));
 }
 
+#define STD_TEXT_EDIT_DIST_DOC \
+	"a, b\ncalculates the edit distance between two strings."
+
 static value_t std_text_edit_dist(
 	value_t* args, lur_t* ctx)
 {
@@ -5831,6 +6352,10 @@ static value_t std_text_edit_dist(
 	return make_number(text_edit_dist(
 		get_text(args[0]), get_text(args[1]), ctx));
 }
+
+#define STD_TEXT_RATIO_DOC \
+	"a, b\nreturns the ratio of text match amount " \
+	"between a and b."
 
 static value_t std_text_ratio(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -5842,18 +6367,30 @@ static value_t std_text_ratio(value_t* args, lur_t* ctx) {
 		(len - text_edit_dist(a, b, ctx)) / (double)len);
 }
 
+#define STD_ARRAY_LEN_DOC \
+	"array\nreturns the length of the array."
+
 static value_t std_array_len(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_number(get_array(args[0])->len);
 }
 
+#define STD_ARRAY_GET_DOC \
+	"array, index\nreturns the item at the nth position " \
+	"within the array."
+
 static value_t std_array_get(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_NUMBER);
 	array_t* array = get_array(args[0]);
 	size_t index = array_convert_index(
 		array, get_number(args[1]), ctx);
 	return array->items[(size_t)index];
 }
+
+#define STD_ARRAY_SET_DOC \
+	"array, index, value\nsets the item at the nth position " \
+	"within the array."
 
 static value_t std_array_set(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5863,6 +6400,10 @@ static value_t std_array_set(value_t* args, lur_t* ctx) {
 	array->items[index] = args[2];
 	return make_none();
 }
+
+#define STD_ARRAY_INSERT_DOC \
+	"array, index, item\ninserts item into the array at the " \
+	"given index."
 
 static value_t std_array_insert(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5877,6 +6418,10 @@ static value_t std_array_insert(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_ARRAY_DEL_DOC \
+	"array, index\ndeletes the item at the provided index " \
+	"from the array."
+
 static value_t std_array_del(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
@@ -5887,10 +6432,17 @@ static value_t std_array_del(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_ARRAY_POP_DOC \
+	"array\ndeletes the last item from the array and " \
+	"returns it."
+
 static value_t std_array_pop(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return array_pop(get_array(args[0]), ctx);
 }
+
+#define STD_ARRAY_HEAD_DOC \
+	"array\nreturns the first item in the array."
 
 static value_t std_array_head(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5900,15 +6452,21 @@ static value_t std_array_head(value_t* args, lur_t* ctx) {
 	return array->items[0];
 }
 
+#define STD_ARRAY_TAIL_DOC \
+	"array\nreturns all but the first item of the array."
+
 static value_t std_array_tail(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
 		error(ctx, ERR_INDEX(make_number(0)));
-	array_t* tail = array_copy(array, ctx);
+	array_t* tail = array_copy(array, false, ctx);
 	array_del(tail, 0, ctx);
 	return make_array(tail);
 }
+
+#define STD_ARRAY_LAST_DOC \
+	"array\nreturns the last item in the array."
 
 static value_t std_array_last(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5917,6 +6475,10 @@ static value_t std_array_last(value_t* args, lur_t* ctx) {
 		error(ctx, ERR_INDEX(make_number(0)));
 	return array->items[array->len - 1];
 }
+
+#define STD_ARRAY_FILL_DOC \
+	"n, fn\nfills the array with n values returned from fn, " \
+	"with fn taking the current count as argument."
 
 static value_t std_array_fill(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5932,6 +6494,10 @@ static value_t std_array_fill(value_t* args, lur_t* ctx) {
 	return make_array(array);
 }
 
+#define STD_ARRAY_REPEAT_DOC \
+	"rep, n\nreturns an array that contains the items " \
+	"in rep repeated n times."
+
 static value_t std_array_repeat(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
@@ -5939,6 +6505,10 @@ static value_t std_array_repeat(value_t* args, lur_t* ctx) {
 	size_t n = (size_t)get_number(args[1]);
 	return make_array(array_repeat(array, n, ctx));
 }
+
+#define STD_ARRAY_ROTATE_DOC \
+	"array, amount\nuse negative amounts to rotate to " \
+	"the left and positive amounts to rotate to the right."
 
 static value_t std_array_rotate(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5951,6 +6521,10 @@ static value_t std_array_rotate(value_t* args, lur_t* ctx) {
 	return make_array(array_rotate_right(array, n, ctx));
 }
 
+#define STD_ARRAY_COUNT_DOC \
+	"array, value\ncounts how many times a value appears " \
+	"in the array."
+
 static value_t std_array_count(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
@@ -5961,11 +6535,18 @@ static value_t std_array_count(value_t* args, lur_t* ctx) {
 	return make_number(count);
 }
 
+#define STD_ARRAY_CONTAINS_DOC \
+	"array, value\nreturns true if the array contains value."
+
 static value_t std_array_contains(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_bool(array_contains(
 		get_array(args[0]), args[1]));
 }
+
+#define STD_ARRAY_FIND_DOC \
+	"array, value, start\nfinds the first index of value in the " \
+	"array after the index start."
 
 static value_t std_array_find(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -5983,6 +6564,10 @@ static value_t std_array_find(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_ARRAY_ITER_DOC \
+	"array, fn\niterates over the array and calls fn for each " \
+	"item, passing the item to fn."
+
 static value_t std_array_iter(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
@@ -5997,6 +6582,10 @@ static value_t std_array_iter(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_ARRAY_ITERI_DOC \
+	"array, fn\niterates over the array and calls fn for each " \
+	"item, passing the index and item to fn."
+
 static value_t std_array_iteri(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
@@ -6010,6 +6599,11 @@ static value_t std_array_iteri(value_t* args, lur_t* ctx) {
 	
 	return make_none();
 }
+
+#define STD_ARRAY_MAP_DOC \
+	"array, fn\nreturns a new array constructed by " \
+	"iterating over the original and passing each value " \
+	"through fn."
 
 static value_t std_array_map(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -6026,6 +6620,10 @@ static value_t std_array_map(value_t* args, lur_t* ctx) {
 	
 	return make_array(mapped);
 }
+
+#define STD_ARRAY_FILTER_DOC \
+	"array, fn\npasses each value in the array to fn and " \
+	"adds it to the new array if fn returns true."
 
 static value_t std_array_filter(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -6044,6 +6642,11 @@ static value_t std_array_filter(value_t* args, lur_t* ctx) {
 	return make_array(filtered);
 }
 
+#define STD_ARRAY_FOLD_DOC \
+	"array, init, fn\nreduces the list down to a single value " \
+	"by passing each pair in the list, with init as the first item," \
+	" to the function fn."
+
 static value_t std_array_fold(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(2, TYPE_FREF);
@@ -6059,11 +6662,19 @@ static value_t std_array_fold(value_t* args, lur_t* ctx) {
 	return result;
 }
 
+#define STD_ARRAY_FLAT_DOC \
+	"array\nreturns a copy of the array with any embedded " \
+	"arrays flattened out."
+
 static value_t std_array_flat(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_array(array_flat(
 		get_array(args[0]), ctx));
 }
+
+#define STD_ARRAY_DEDUP_DOC \
+	"array\nreturns a copy of the array with any duplicates " \
+	"removed."
 
 static value_t std_array_dedup(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -6074,6 +6685,9 @@ static value_t std_array_dedup(value_t* args, lur_t* ctx) {
 			array_push(result, array->items[i], ctx);
 	return make_array(result);
 }
+
+#define STD_ARRAY_SUM_DOC \
+	"array\nsums all numbers in the list."
 
 static value_t std_array_sum(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -6089,6 +6703,9 @@ static value_t std_array_sum(value_t* args, lur_t* ctx) {
 	
 	return make_number(result);
 }
+
+#define STD_ARRAY_AVERAGE_DOC \
+	"array\nreturns the average number in the list."
 
 static value_t std_array_average(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -6106,7 +6723,10 @@ static value_t std_array_average(value_t* args, lur_t* ctx) {
 	return make_number(result);
 }
 
-static value_t std_array_mean(value_t* args, lur_t* ctx) {
+#define STD_ARRAY_median_DOC \
+	"array\nreturns the median value in the list."
+
+static value_t std_array_median(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	
@@ -6133,6 +6753,10 @@ static value_t std_array_mean(value_t* args, lur_t* ctx) {
 	return make_number(result);
 }
 
+#define STD_ARRAY_ANY_DOC \
+	"array, fn\nreturns true if the array contains any " \
+	"elements that pass the predicate returned by fn."
+
 static value_t std_array_any(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
@@ -6151,6 +6775,10 @@ static value_t std_array_any(value_t* args, lur_t* ctx) {
 	
 	return make_bool(false);
 }
+
+#define STD_ARRAY_ALL_DOC \
+	"array, fn\nreturns true if the array contains only " \
+	"elements that pass the predicate returned by fn."
 
 static value_t std_array_all(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -6171,6 +6799,9 @@ static value_t std_array_all(value_t* args, lur_t* ctx) {
 	return make_bool(true);
 }
 
+#define STD_ARRAY_SORT_DOC \
+	"array\nsorts the array using the default_sort function."
+
 static value_t std_array_sort(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	value_t value;
@@ -6184,6 +6815,11 @@ static value_t std_array_sort(value_t* args, lur_t* ctx) {
 		get_array(args[0]), sorter, ctx));
 }
 
+#define STD_ARRAY_SORT_BY_DOC \
+	"array, sort_fn\nsorts the list using a custom sort " \
+	"function. the function takes a and b and should " \
+	"return the smaller value."
+
 static value_t std_array_sort_by(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
@@ -6191,12 +6827,16 @@ static value_t std_array_sort_by(value_t* args, lur_t* ctx) {
 		get_array(args[0]), get_fref(args[1]), ctx));
 }
 
+#define STD_ARRAY_SWAP_DOC \
+	"array, a, b\nreturns a copy of the list with elements at " \
+	"indices a and b swapped."
+
 static value_t std_array_swap(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
 	const array_t* input = get_array(args[0]);
-	array_t* output = array_copy(input, ctx);
+	array_t* output = array_copy(input, false, ctx);
 	
 	size_t a = array_convert_index(
 		input, get_number(args[1]), ctx);
@@ -6208,10 +6848,16 @@ static value_t std_array_swap(value_t* args, lur_t* ctx) {
 	return make_array(output);
 }
 
+#define STD_ARRAY_JOIN_DOC \
+	"array\nmerges the items in the array into a single text."
+
 static value_t std_array_join(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_text(array_join(get_array(args[0]), ctx));
 }
+
+#define STD_ARRAY_ZIP_DOC \
+	"zip\ntakes a list of arrays and zipper merges them."
 
 static value_t std_array_zip(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
@@ -6239,6 +6885,10 @@ static value_t std_array_zip(value_t* args, lur_t* ctx) {
 	return make_array(zip);
 }
 
+#define STD_ARRAY_CHUNK_DOC \
+	"array, size\nsplits an array into a series of smaller " \
+	"chunks."
+
 static value_t std_array_chunk(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
@@ -6259,10 +6909,16 @@ static value_t std_array_chunk(value_t* args, lur_t* ctx) {
 	return make_array(chunks);
 }
 
+#define STD_MAP_LEN_DOC \
+	"map\nreturns the length of the map."
+
 static value_t std_map_len(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	return make_number(get_map(args[0])->len);
 }
+
+#define STD_MAP_GET_DOC \
+	"map, key\nreturns the valie associated with a key."
 
 static value_t std_map_get(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
@@ -6273,17 +6929,28 @@ static value_t std_map_get(value_t* args, lur_t* ctx) {
 	return value;
 }
 
+#define STD_MAP_SET_DOC \
+	"map, key, value\ncreates or updates the key/value pair."
+
 static value_t std_map_set(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	map_set(get_map(args[0]), args[1], args[2], ctx);
 	return make_none();
 }
 
+#define STD_MAP_DEL_DOC \
+	"map, key\ndeletes the key/value pair associated with " \
+	"the key."
+
 static value_t std_map_del(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	map_del(get_map(args[0]), args[1], ctx);
 	return make_none();
 }
+
+#define STD_MAP_HAS_KEY_DOC \
+	"map, key\nreturns true if the map contains the " \
+	"given key."
 
 static value_t std_map_has_key(value_t* args, lur_t* ctx)
 {
@@ -6299,6 +6966,10 @@ static value_t std_map_has_key(value_t* args, lur_t* ctx)
 	
 	return make_bool(false);
 }
+
+#define STD_MAP_HAS_VALUE_DOC \
+	"map, value\nreturns true if the map contains the " \
+	"given value."
 
 static value_t std_map_has_value(
 	value_t* args, lur_t* ctx)
@@ -6316,6 +6987,10 @@ static value_t std_map_has_value(
 	return make_bool(false);
 }
 
+#define STD_MAP_KEYS_DOC \
+	"map\nreturns an array containing all the keys " \
+	"of the map."
+
 static value_t std_map_keys(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
@@ -6330,6 +7005,10 @@ static value_t std_map_keys(value_t* args, lur_t* ctx) {
 	return make_array(keys);
 }
 
+#define STD_MAP_VALUES_DOC \
+	"map\nreturns an array containing all the values " \
+	"of the map."
+
 static value_t std_map_values(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
@@ -6343,6 +7022,9 @@ static value_t std_map_values(value_t* args, lur_t* ctx) {
 	
 	return make_array(values);
 }
+
+#define STD_MAP_KV_PAIRS_DOC \
+	"map\nreturns a list containing all key/value pairs."
 
 static value_t std_map_kv_pairs(
 	value_t* args, lur_t* ctx)
@@ -6367,6 +7049,10 @@ static value_t std_map_kv_pairs(
 	return make_array(pairs);
 }
 
+#define STD_MAP_FROM_KV_PAIRS_DOC \
+	"kv_pairs\ncreates a map out of an array of " \
+	"key/value pairs"
+
 static value_t std_map_from_kv_pairs(
 	value_t* args, lur_t* ctx)
 {
@@ -6389,6 +7075,10 @@ static value_t std_map_from_kv_pairs(
 	return make_map(map);
 }
 
+#define STD_MAP_ITER_DOC \
+	"map, fn\niterates over all entries in the map, passing " \
+	"each key and value to fn."
+
 static value_t std_map_iter(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	typecheck(1, TYPE_FREF);
@@ -6404,6 +7094,10 @@ static value_t std_map_iter(value_t* args, lur_t* ctx) {
 	
 	return make_none();
 }
+
+#define STD_MAP_ITERI_DOC \
+	"map\niterates over all entries in the map, passing " \
+	"each key and value, alongside the current index to fn."
 
 static value_t std_map_iteri(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
@@ -6423,6 +7117,10 @@ static value_t std_map_iteri(value_t* args, lur_t* ctx) {
 	
 	return make_none();
 }
+
+#define STD_MAP_GET_OR_DEFAULT_DOC \
+	"map, key, default\ntries to get a value from the key, " \
+	"returning default if not found."
 
 static value_t std_map_get_or_default(
 	value_t* args, lur_t* ctx)
@@ -6458,6 +7156,10 @@ void* thread_spawn(void* ptr) {
 	return NULL;
 }
 
+#define STD_THREAD_SPAWN_DOC \
+	"fn, args\nspawns a new thread that calls the function " \
+	"fn with the specified arguments."
+
 static value_t std_thread_spawn(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_FREF);
 	typecheck(1, TYPE_ARRAY);
@@ -6487,6 +7189,10 @@ static value_t std_thread_spawn(value_t* args, lur_t* ctx) {
 	thread->is_free = false;
 	return make_number(thread_index);
 }
+
+#define STD_THREAD_JOIN_DOC \
+	"thread\njoins the thread with the specified id to the " \
+	"main thread, waiting for it to complete its work."
 
 static value_t std_thread_join(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -6562,26 +7268,32 @@ static size_t io_file_size(const text_t* path, lur_t* ctx) {
 	return len;
 }
 
-static value_t std_io_print(value_t* args, lur_t* ctx) {
-	value_print(args[0], ctx);
-	fflush(stdout);
-	return make_none();
-}
+#define STD_IO_PRINT_DOC \
+	"value\nprints the provided value to standard output."
 
-static value_t std_io_print_ln(value_t* args, lur_t* ctx) {
+static value_t std_io_print(value_t* args, lur_t* ctx) {
 	value_print(args[0], ctx);
 	lur_printf("\n");
 	return make_none();
 }
 
-static value_t std_io_read_ln(value_t* args, lur_t* ctx) {
+#define STD_IO_INPUT_DOC \
+	"returns a line read from standard input as text."
+
+static value_t std_io_input(value_t* args, lur_t* ctx) {
 	return make_text(io_read_stdin(ctx));
 }
+
+#define STD_IO_READ_DOC \
+	"path\nreturns text read from the provided path."
 
 static value_t std_io_read(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	return make_text(io_read(get_text(args[0]), ctx));
 }
+
+#define STD_IO_WRITE_DOC \
+	"path, contents\nwrites content to the provided path."
 
 static value_t std_io_write(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -6590,6 +7302,9 @@ static value_t std_io_write(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_IO_APPEND_DOC \
+	"path, contents\nappends contents to the provided path."
+
 static value_t std_io_append(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
@@ -6597,11 +7312,17 @@ static value_t std_io_append(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_IO_SIZE_DOC \
+	"path\nreturns the size of the file at path."
+
 static value_t std_io_size(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	return make_number(
 		io_file_size(get_text(args[0]), ctx));
 }
+
+#define STD_IO_DIR_EXISTS_DOC \
+	"path\nreturns true if a directory exists at path."
 
 static value_t std_io_dir_exists(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -6612,12 +7333,19 @@ static value_t std_io_dir_exists(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_IO_MAKE_DIR_DOC \
+	"path\ncreates an empty directory at path."
+
 static value_t std_io_make_dir(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* path = get_text(args[0]);
 	mkdir((const char*)path->buffer, 0700);
 	return make_none();
 }
+
+#define STD_IO_LIST_DIR_DOC \
+	"path\nreturns an array containing all files found in the " \
+	"directory, use path '.' for current directory."
 
 static value_t std_io_list_dir(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -6640,11 +7368,17 @@ static value_t std_io_list_dir(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_IO_DEL_DOC \
+	"path\ndeletes the file or directory at the given path."
+
 static value_t std_io_del(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	remove((char*)get_text(args[0])->buffer);
 	return make_none();
 }
+
+#define STD_SOCKET_CREATE_DOC \
+	"type\ncreates a new socket of the specified type."
 
 static value_t std_socket_create(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -6664,6 +7398,10 @@ static value_t std_socket_create(value_t* args, lur_t* ctx) {
 	
 	return make_number(handle);
 }
+
+#define STD_SOCKET_CONNECT_DOC \
+	"socket, ip, port\nconnects the socket to the specified " \
+	"ip:port."
 
 static value_t std_socket_connect(value_t* args, lur_t* ctx)
 {
@@ -6694,6 +7432,10 @@ static value_t std_socket_connect(value_t* args, lur_t* ctx)
 	return make_number(result);
 }
 
+#define STD_SOCKET_BIND_DOC \
+	"socket, ip, port\nbinds the socket to ip:port, " \
+	"used for servers."
+
 static value_t std_socket_bind(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_TEXT);
@@ -6722,6 +7464,10 @@ static value_t std_socket_bind(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
+#define STD_SOCKET_LISTEN_DOC \
+	"socket, backlog\nsets up a listen server on the socket, " \
+	"with a backlog of max backlog connections."
+
 static value_t std_socket_listen(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -6733,6 +7479,11 @@ static value_t std_socket_listen(value_t* args, lur_t* ctx) {
 			strerror(errno)));
 	return make_none();
 }
+
+#define STD_SOCKET_ACCEPT_DOC \
+	"socket\naccepts an incoming connection request, " \
+	"returns a new socket handle used for sending data " \
+	"to the client."
  
 static value_t std_socket_accept(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -6750,6 +7501,9 @@ static value_t std_socket_accept(value_t* args, lur_t* ctx) {
 	return make_number(result);
 }
 
+#define STD_SOCKET_SEND_DOC \
+	"socket, text\nsends text over the network."
+
 static value_t std_socket_send(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_TEXT);
@@ -6761,6 +7515,9 @@ static value_t std_socket_send(value_t* args, lur_t* ctx) {
 			strerror(errno)));
 	return make_none();
 }
+
+#define STD_SOCKET_RECV_DOC \
+	"socket\nreceives data sent over the network as text."
 
 static value_t std_socket_recv(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -6775,6 +7532,9 @@ static value_t std_socket_recv(value_t* args, lur_t* ctx) {
 		(const uint8_t*)buffer, result - 1, ctx));
 }
 
+#define STD_SOCKET_CLOSE_DOC \
+	"socket\ncloses and disconnects a socket."
+
 static value_t std_socket_close(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int handle = (int)get_number(args[0]);
@@ -6782,57 +7542,17 @@ static value_t std_socket_close(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static value_t std_value_type_of(value_t* args, lur_t* ctx) {
-	return make_number(args[0].tag);
-}
-
-static value_t std_value_default(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_NUMBER);
-	int64_t type = (int64_t)get_number(args[0]);
-	switch (type) {
-	case TYPE_NONE: return make_none();
-	case TYPE_BOOL: return make_bool(false);
-	case TYPE_NUMBER: return make_number(0);
-	case TYPE_TEXT: return make_text(text_lit("", ctx));
-	case TYPE_ARRAY: return make_array(array_new(ctx));
-	case TYPE_MAP: return make_map(map_new(ctx));
-	case TYPE_FREF: {
-		func_t* func = func_new(ctx);
-		func_write(func, OP_DATA, 1, ctx);
-		func_write(func, 0, 1, ctx);
-		func_write(func, 0, 1, ctx);
-		func_write(func, OP_RET, 1, ctx);
-		func_write_value(func, make_none(), ctx);
-		return make_fref(fref_new(func, ctx));
-	}
-	default: error(ctx, ERR_RANGE(0, TYPE_FREF, type));
-	}
-	
-	unreachable();
-	return make_none();
-}
-
-static value_t std_value_serialize(
-	value_t* args, lur_t* ctx)
-{
-	return make_text(value_serialize(args[0], ctx));
-}
-
-static value_t std_value_deserialize(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_TEXT);
-	return value_deserialize(get_text(args[0]), ctx);
-}
+#define STD_DEBUG_STATS_DOC \
+	"returns a map containing stats about the system."
 
 static value_t std_debug_stats(value_t* args, lur_t* ctx) {
 	map_t* stats = map_new(ctx);
 	map_set(stats, make_text(text_lit("total ram", ctx)),
 		make_number(
-			system_total_ram() / 1024.0 / 1024.0), ctx);
+			mem_total_ram() / 1024.0 / 1024.0), ctx);
 	map_set(stats, make_text(text_lit("free ram", ctx)),
 		make_number(
-			system_free_ram() / 1024.0 / 1024.0), ctx);
+			mem_free_ram() / 1024.0 / 1024.0), ctx);
 	map_set(stats, make_text(text_lit("average load", ctx)),
 		make_number(
 			system_average_load()), ctx);
@@ -6870,576 +7590,6 @@ static value_t std_debug_stats(value_t* args, lur_t* ctx) {
 	return make_map(stats);
 }
 
-static value_t std_debug_set_alloc_hook(
-	value_t* args, lur_t* ctx)
-{
-	if (args[0].tag == TYPE_NONE) {
-		ctx->alloc_hook = NULL;
-		return make_none();
-	}
-	
-	typecheck(0, TYPE_FREF);
-	ctx->alloc_hook = get_fref(args[0]);
-	return make_none();
-}
-
-#if LUR_INCLUDE_SDL
-
-static value_t std_engine_init(value_t* args, lur_t* ctx) {
-	ctx->engine.callbacks = array_new(ctx);
-	for (size_t i = 0; i < MAX_EVENTS; i++)
-		array_push(ctx->engine.callbacks, make_none(), ctx);
-	
-	ctx->engine.now = SDL_GetPerformanceCounter();
-	ctx->engine.last = 0;
-	ctx->engine.frame_time = 0.0;
-	ctx->engine.total_time = 0.0;
-	return make_none();
-}
-
-static value_t std_engine_shutdown(
-	value_t* args, lur_t* ctx)
-{
-	
-}
-
-static value_t std_engine_set_event_handler(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_NUMBER);
-	typecheck(1, TYPE_FREF);
-	size_t index = (size_t)get_number(args[0]);
-	ctx->engine.callbacks->items[index] = args[1];
-	return make_none();
-}
-
-static void engine_update_time(lur_t* ctx) {
-	ctx->engine.last = ctx->engine.now;
-	ctx->engine.now = SDL_GetPerformanceCounter();
-	ctx->engine.frame_time =
-		(ctx->engine.now - ctx->engine.last) /
-				(double)SDL_GetPerformanceFrequency();
-	ctx->engine.total_time += ctx->engine.frame_time;
-}
-
-static void engine_handle_events(lur_t* ctx) {
-	SDL_Event e;
-	while (SDL_PollEvent(&e)) {
-		switch (e.type) {
-		case SDL_QUIT: {
-			value_t fref = ctx->engine.callbacks->
-				items[EVENT_QUIT];
-				
-			if (fref.tag != TYPE_FREF) break;	
-			value_t fargs[] = {};
-			lur_call_function(ctx, get_fref(fref), fargs, 0);
-			break;
-		}
-		case SDL_FINGERDOWN: {
-			ctx->gui.x = e.tfinger.x;
-			ctx->gui.y = e.tfinger.y;
-			ctx->gui.holding = true;
-			
-			value_t fref = ctx->engine.callbacks->
-				items[EVENT_FINGER_DOWN];
-			
-			if (fref.tag != TYPE_FREF) break;	
-			value_t fargs[] = {
-				make_number(e.tfinger.x * ctx->video.width),
-				make_number(e.tfinger.y * ctx->video.height)};
-			lur_call_function(ctx, get_fref(fref), fargs, 2);
-			break;
-		}
-		case SDL_FINGERUP: {
-			ctx->gui.x = e.tfinger.x;
-			ctx->gui.y = e.tfinger.y;
-			ctx->gui.holding = false;
-			
-			value_t fref = ctx->engine.callbacks->
-				items[EVENT_FINGER_UP];
-			
-			if (fref.tag != TYPE_FREF) break;	
-			value_t fargs[] = {
-				make_number(e.tfinger.x * ctx->video.width),
-				make_number(e.tfinger.y * ctx->video.height)};
-			lur_call_function(ctx, get_fref(fref), fargs, 2);
-			break;
-		}
-		case SDL_FINGERMOTION: {
-			ctx->gui.x = e.tfinger.x;
-			ctx->gui.y = e.tfinger.y;
-			
-			value_t fref = ctx->engine.callbacks->
-				items[EVENT_FINGER_MOTION];
-			
-			if (fref.tag != TYPE_FREF) break;	
-			value_t fargs[] = {
-				make_number(e.tfinger.x * ctx->video.width),
-				make_number(e.tfinger.y * ctx->video.height),
-				make_number(e.tfinger.dx),
-				make_number(e.tfinger.dy)};
-			lur_call_function(ctx, get_fref(fref), fargs, 2);
-			break;
-		}
-		default: break;
-		}
-	}
-}
-
-static value_t std_engine_update(value_t* args, lur_t* ctx) {
-	engine_update_time(ctx);
-	engine_handle_events(ctx);
-}
-
-static value_t std_engine_frame_time(
-	value_t* args, lur_t* ctx)
-{
-	return make_number(ctx->engine.frame_time);
-}
-
-static value_t std_engine_total_time(
-	value_t* args, lur_t* ctx)
-{
-	return make_number(ctx->engine.total_time);
-}
-
-static value_t std_video_init(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_TEXT);
-	typecheck(1, TYPE_NUMBER);
-	typecheck(2, TYPE_NUMBER);
-	const text_t* title = get_text(args[0]);
-	ctx->video.width = get_number(args[1]);
-	ctx->video.height = get_number(args[2]);
-	
-	if (SDL_Init(SDL_INIT_VIDEO) < 0)
-		error(ctx, ERR_SDL("failed to init video"));
-		
-	if (IMG_Init(IMG_INIT_PNG) < 0)
-		error(ctx, ERR_SDL_IMAGE("failed to init PNG loader"));
-		
-	for (size_t i = 0; i < MAX_TEXTURES; i++)
-		ctx->video.texs[i] = NULL;
-		
-	ctx->video.window = SDL_CreateWindow(
-		(const char*)title->buffer,
-		SDL_WINDOWPOS_CENTERED,
-		SDL_WINDOWPOS_CENTERED,
-		ctx->video.width,
-		ctx->video.height,
-		0);
-	
-	if (!ctx->video.window)
-		error(ctx, ERR_SDL("failed to create window"));
-		
-	ctx->video.renderer = SDL_CreateRenderer(
-		ctx->video.window, -1, 
-			SDL_RENDERER_ACCELERATED);
-	
-    if (!ctx->video.renderer)
-    	error(ctx, ERR_SDL("failed to create renderer"));
-    
-	return make_none();
-}
-
-static value_t std_video_load_tex(value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_TEXT);
-	const text_t* path = get_text(args[0]);
-	SDL_Texture* tex = IMG_LoadTexture(
-		ctx->video.renderer, (const char*)path->buffer);
-	
-	if (!tex)
-		error(ctx, ERR_READ_FAILED(path));
-	
-	int64_t index = -1;
-	for (size_t i = 0; i < MAX_TEXTURES; i++) {
-		if (!ctx->video.texs[i]) {
-			ctx->video.texs[i] = tex;
-			index = i;
-			break;
-		}
-	}
-	
-	if (index == -1)
-		error(ctx, ERR_LIMIT("texture", MAX_TEXTURES));
-	
-	return make_number(index);
-}
-
-static value_t std_video_clear(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_ARRAY);
-	
-	const array_t* color = get_array(args[0]);
-	SDL_SetRenderDrawColor(ctx->video.renderer,
-		get_number(color->items[0]) * 255,
-    	get_number(color->items[1]) * 255,
-    	get_number(color->items[2]) * 255,
-    	get_number(color->items[3]) * 255);
-    SDL_RenderClear(ctx->video.renderer);
-    return make_none();
-}
-
-static value_t std_video_set_pixel(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_ARRAY);
-	typecheck(1, TYPE_ARRAY);
-	
-	const array_t* pos = get_array(args[0]);
-	const array_t* color = get_array(args[1]);
-	
-	SDL_SetRenderDrawColor(ctx->video.renderer,
-    	get_number(color->items[0]) * 255,
-    	get_number(color->items[1]) * 255,
-    	get_number(color->items[2]) * 255,
-    	get_number(color->items[3]) * 255);
-	SDL_RenderDrawPoint(ctx->video.renderer,
-		get_number(pos->items[0]),
-		get_number(pos->items[1]));
-	return make_none();
-}
-
-static value_t std_video_draw_line(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_ARRAY);
-	typecheck(1, TYPE_ARRAY);
-	typecheck(2, TYPE_NUMBER);
-	typecheck(3, TYPE_ARRAY);
-	
-	const array_t* start = get_array(args[0]);
-	const array_t* end = get_array(args[1]);
-	double width = get_number(args[2]);
-	const array_t* color = get_array(args[3]);
-	
-	for (double i = -width / 2; i < width / 2; i += 0.5) {
-		int x0 = get_number(start->items[0]);
-		int y0 = get_number(start->items[1]);
-		int x1 = get_number(end->items[0]);
-		int y1 = get_number(end->items[1]);
-	
-		int dx = abs(x1 - x0);
-		int dy = abs(y1 - y0);
-		int sx = (x0 < x1) ? 1 : -1;
-		int sy = (y0 < y1) ? 1 : -1;
-		int err = ((dx > dy) ? dx : -dy) / 2;
-	
-		x0 += i * -sx;
-		y0 += i * sy;
-		x1 += i * -sx;
-		y1 += i * sy;
-	
-		for (;;) {
-			SDL_SetRenderDrawColor(ctx->video.renderer,
-    			get_number(color->items[0]) * 255,
-    			get_number(color->items[1]) * 255,
-    			get_number(color->items[2]) * 255,
-    			get_number(color->items[3]) * 255);
-			SDL_RenderDrawPoint(ctx->video.renderer, x0, y0);
-			
-			if (x0 == x1 && y0 == y1)
-				break;
-		
-			if (err * 2 > -dx) { err -= dy; x0 += sx; }
-			if (err * 2 < dy) { err += dx; y0 += sy; }
-		}
-	}
-	return make_none();
-}
-
-static value_t std_video_draw_tex(value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_NUMBER);
-	typecheck(1, TYPE_ARRAY);
-	typecheck(2, TYPE_ARRAY);
-	
-	size_t id = (size_t)get_number(args[0]);
-	if (id > MAX_TEXTURES || !ctx->video.texs[id])
-		error(ctx, "invalid texture handle '%d'", id);
-		
-	const array_t* pos = get_array(args[1]);
-	const array_t* size = get_array(args[2]);
-	
-	SDL_Rect dst = (SDL_Rect){
-		get_number(pos->items[0]),
-		get_number(pos->items[1]),
-		get_number(size->items[0]),
-		get_number(size->items[1])};
-	SDL_Texture* tex = ctx->video.texs[id];
-	SDL_RenderCopy(ctx->video.renderer, tex, NULL, &dst);
-	return make_none();
-}
-
-static value_t std_video_render(
-	value_t* args, lur_t* ctx)
-{
-	SDL_RenderPresent(ctx->video.renderer);
-	return make_none();
-}
-
-static value_t std_video_shutdown(
-	value_t* args, lur_t* ctx)
-{
-	for (size_t i = 0; i < MAX_TEXTURES; i++)
-		SDL_DestroyTexture(ctx->video.texs[i]);
-	SDL_DestroyRenderer(ctx->video.renderer);
-	SDL_DestroyWindow(ctx->video.window);
-	SDL_QuitSubSystem(SDL_INIT_VIDEO);
-	return make_none();
-}
-
-static value_t std_gui_init(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_TEXT);
-	typecheck(1, TYPE_TEXT);
-	const text_t* font_path = get_text(args[0]);
-	const text_t* button_path = get_text(args[1]);
-	
-	if (TTF_Init() < 0)
-		error(ctx, ERR_SDL_TTF("failed to init TTF loader"));
-		
-	ctx->gui.font = TTF_OpenFont(
-		(const char*)font_path->buffer, FONT_SIZE);
-	if (!ctx->gui.font)
-		error(ctx, ERR_READ_FAILED(font_path));
-		
-	ctx->gui.button = IMG_LoadTexture(
-		ctx->video.renderer,
-		(const char*)button_path->buffer);
-	if (!ctx->gui.button)
-		error(ctx, ERR_READ_FAILED(button_path));
-		
-	return make_none();
-}
-
-static void ui_get_text_size(
-	const text_t* text, int* w, int* h, lur_t* ctx)
-{
-	assert(w && h);
-	int result = TTF_SizeUTF8(ctx->gui.font,
-		(const char*)text->buffer, w, h);
-	if (result < 0)
-		error(ctx, ERR_SDL_TTF("failed to calculate text size"));
-}
-
-static value_t std_gui_draw_text(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_TEXT);
-	typecheck(1, TYPE_ARRAY);
-	typecheck(2, TYPE_ARRAY);
-	
-	const text_t* text = get_text(args[0]);
-	const array_t* pos = get_array(args[1]);
-	const array_t* color = get_array(args[2]);
-	
-	SDL_Color col = (SDL_Color){
-		get_number(color->items[0]) * 255,
-		get_number(color->items[1]) * 255,
-		get_number(color->items[2]) * 255,
-		get_number(color->items[3]) * 255};
-	
-	SDL_Surface* surf = TTF_RenderUTF8_Solid(
-		ctx->gui.font, (const char*)text->buffer, col);
-	if (!surf)
-		error(ctx, ERR_SDL("failed to create text surface"));
-	
-	SDL_Texture* tex = SDL_CreateTextureFromSurface(
-		ctx->video.renderer, surf);
-	if (!tex)
-		error(ctx, ERR_SDL("failed to create text texture"));
-	
-	int w, h;
-	ui_get_text_size(text, &w, &h, ctx);
-	
-	SDL_Rect dst = (SDL_Rect){
-		get_number(pos->items[0]),
-		get_number(pos->items[1]),
-		w, h};
-	SDL_RenderCopy(ctx->video.renderer, tex, NULL, &dst);
-	return make_none();
-}
-
-static value_t std_gui_draw_button(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_TEXT);
-	typecheck(1, TYPE_ARRAY);
-	typecheck(2, TYPE_ARRAY);
-	typecheck(3, TYPE_ARRAY);
-	typecheck(4, TYPE_ARRAY);
-	
-	const text_t* text = get_text(args[0]);
-	const array_t* pos = get_array(args[1]);
-	const array_t* size = get_array(args[2]);
-	const array_t* color = get_array(args[3]);
-	
-	SDL_SetTextureColorMod(ctx->gui.button,
-    	get_number(color->items[0]) * 255,
-    	get_number(color->items[1]) * 255,
-    	get_number(color->items[2]) * 255);
-    SDL_SetTextureAlphaMod(ctx->gui.button,
-    	get_number(color->items[3]) * 255);
-    
-	SDL_Rect dst = (SDL_Rect){
-		get_number(pos->items[0]),
-		get_number(pos->items[1]),
-		get_number(size->items[0]),
-		get_number(size->items[1])};
-	SDL_RenderCopy(ctx->video.renderer,
-		ctx->gui.button, NULL, &dst);
-	
-	int text_w, text_h;
-	ui_get_text_size(text, &text_w, &text_h, ctx);
-	
-	array_t* text_pos = array_copy(pos, ctx);
-	int x = get_number(text_pos->items[0]);
-	text_pos->items[0] = make_number(
-		x + dst.w / 2 - text_w / 2);
-	
-	int y = get_number(text_pos->items[1]);
-	text_pos->items[1] = make_number(
-		y + dst.h / 2 - text_h / 2);
-	
-	value_t text_args[] = {
-			args[0], make_array(text_pos), args[4]};
-	std_gui_draw_text(text_args, ctx);
-	
-	return make_none();
-}
-
-static value_t std_gui_shutdown(value_t* args, lur_t* ctx) {
-	TTF_CloseFont(ctx->gui.font);
-	SDL_DestroyTexture(ctx->gui.button);
-	return make_none();
-}
-
-static value_t std_audio_init(value_t* args, lur_t* ctx) {
-	if (SDL_Init(SDL_INIT_AUDIO) < 0)
-		error(ctx, ERR_SDL("failed to init audio"));
-		
-	if (Mix_OpenAudio(48000,
-		MIX_DEFAULT_FORMAT, 2, 4096) < 0)
-		error(ctx, ERR_SDL_MIXER("failed to open audio"));
-		
-	for (size_t i = 0; i < MAX_SOUNDS; i++)
-		ctx->audio.sounds[i] = NULL;
-		
-	for (size_t i = 0; i < MAX_MUSIC; i++)
-		ctx->audio.music[i] = NULL;
-		
-	return make_none();
-}
-
-static value_t std_audio_set_volume(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_NUMBER);
-	double volume = get_number(args[0]);
-	Mix_Volume(-1, volume * 128.0);
-	Mix_VolumeMusic(volume * 128.0);
-	return make_none();
-}
-
-static value_t std_audio_get_volume(
-	value_t* args, lur_t* ctx)
-{
-	return make_number(Mix_Volume(-1, -1) * 128.0);
-}
-
-static value_t std_audio_load(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_TEXT);
-	const text_t* path = get_text(args[0]);
-	Mix_Chunk* sound = Mix_LoadWAV(
-		(const char*)path->buffer);
-	
-	if (!sound)
-		error(ctx, ERR_READ_FAILED(path));
-	
-	int64_t index = -1;
-	for (size_t i = 0; i < MAX_SOUNDS; i++) {
-		if (!ctx->audio.sounds[i]) {
-			ctx->audio.sounds[i] = sound;
-			index = i;
-			break;
-		}
-	}
-	
-	if (index == -1)
-		error(ctx, ERR_LIMIT("sound", MAX_SOUNDS));
-	
-	return make_number(index);
-}
-
-static value_t std_audio_load_music(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_TEXT);
-	const text_t* path = get_text(args[0]);
-	Mix_Music* music = Mix_LoadMUS(
-		(const char*)path->buffer);
-	
-	if (!music)
-		error(ctx, ERR_READ_FAILED(path));
-	
-	int64_t index = -1;
-	for (size_t i = 0; i < MAX_MUSIC; i++) {
-		if (!ctx->audio.music[i]) {
-			ctx->audio.music[i] = music;
-			index = i;
-			break;
-		}
-	}
-	
-	if (index == -1)
-		error(ctx, ERR_LIMIT("music", MAX_MUSIC));
-	
-	return make_number(index);
-}
-
-static value_t std_audio_play(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_NUMBER);
-	size_t id = (size_t)get_number(args[0]);
-	if (id > MAX_SOUNDS || !ctx->audio.sounds[id])
-		error(ctx, "invalid sound handle '%d'", id);
-	
-	Mix_Chunk* sound = ctx->audio.sounds[id];
-	if (Mix_PlayChannel(-1, sound, 0) < 0)
-		error(ctx, ERR_SDL_MIXER("failed to play sound"));
-		
-	return make_none();
-}
-
-static value_t std_audio_play_music(
-	value_t* args, lur_t* ctx)
-{
-	typecheck(0, TYPE_NUMBER);
-	size_t id = (size_t)get_number(args[0]);
-	if (id > MAX_MUSIC || !ctx->audio.music[id])
-		error(ctx, "invalid music handle '%d'", id);
-	
-	Mix_Music* music = ctx->audio.music[id];
-	if (Mix_PlayMusic(music, 1) < 0)
-		error(ctx, ERR_SDL_MIXER("failed to play music"));
-		
-	return make_none();
-}
-
-static value_t std_audio_shutdown(
-	value_t* args, lur_t* ctx)
-{
-	for (size_t i = 0; i < MAX_SOUNDS; i++)
-		Mix_FreeChunk(ctx->audio.sounds[i]);
-	for (size_t i = 0; i < MAX_MUSIC; i++)
-		Mix_FreeMusic(ctx->audio.music[i]);
-	Mix_CloseAudio();
-	SDL_QuitSubSystem(SDL_INIT_AUDIO);
-	return make_none();
-}
-
-#endif
-
 #undef typecheck
 
 static const map_t* lur_new_enum(
@@ -7455,7 +7605,10 @@ static const map_t* lur_new_enum(
 }
 
 static void stdvar_add(
-	lur_t* ctx, const char* name, value_t value)
+	lur_t* ctx,
+	const char* name,
+	value_t value,
+	const char* help_text)
 {
 	#if LUR_DEBUG_PRINT_STDLIB
 	if (ctx->std_map_name)
@@ -7470,18 +7623,34 @@ static void stdvar_add(
 			make_text(text_lit(name, ctx)),
 			value,
 			ctx);
-		return;
+	} else {
+		map_set(ctx->std_map,
+			make_text(text_lit(name, ctx)),
+			value,
+			ctx);
 	}
 	
-	map_set(ctx->std_map,
-		make_text(text_lit(name, ctx)),
-		value,
-		ctx);
+	text_t* help_key;
+	if (!ctx->std_map_name)
+		help_key = text_lit(name, ctx);
+	else
+		help_key = text_fmt(ctx, "%s.%s",
+			ctx->std_map_name, name);
+			
+	value_t text_value;
+	if (!help_text)
+		text_value = make_none();
+	else
+		text_value = make_text(text_lit(help_text, ctx));
+		
+	map_set(ctx->help,
+		make_text(help_key), text_value, ctx);
 }
 
 static void stdfun_add(
 	lur_t* ctx, const char* name, 
-	uint8_t argc, syscall_fn_t fn)
+	uint8_t argc, syscall_fn_t fn,
+	const char* help_text)
 {
 	func_t* syscall = func_new(ctx);
 	syscall->name = text_lit(name, ctx);
@@ -7489,10 +7658,10 @@ static void stdfun_add(
 	syscall->syscall = fn;
 	
 	stdvar_add(ctx, name,
-		make_fref(fref_new(syscall, ctx)));
+		make_fref(fref_new(syscall, ctx)), help_text);
 }
 
-static void std_set_map(
+static void std_set_module(
 	lur_t* ctx, const char* name)
 {
 	if (!name) {
@@ -7514,335 +7683,460 @@ void stdlib_load(lur_t* ctx) {
 	gc_pause(ctx);
 	
 	stdvar_add(ctx, "GLOBALS",
-		make_map(ctx->vm.globals));
+		make_map(ctx->vm.globals),
+		"map containing all global variables");
 	stdvar_add(ctx, "EXIT_SUCCESS", make_number(
-		EXIT_SUCCESS));
+		EXIT_SUCCESS),
+		"return value indicating the successful exit of a "
+		"process");
 	stdvar_add(ctx, "EXIT_FAILURE", make_number(
-		EXIT_FAILURE));
-	stdfun_add(ctx, "load", 1, std_load);
-	stdfun_add(ctx, "eval", 1, std_eval);
-	stdfun_add(ctx, "error", 1, std_error);
-	stdfun_add(ctx, "as_number", 1, std_as_number);
-	stdfun_add(ctx, "as_text", 1, std_as_text);
-	stdfun_add(ctx, "loop", 2, std_loop);
-	stdfun_add(ctx, "while", 1, std_while);
-	stdfun_add(ctx, "range", 2, std_range);
-	stdfun_add(ctx, "range_inc", 2, std_range_inc);
-	stdfun_add(ctx, "default_sort", 2, std_default_sort);
-	stdfun_add(ctx, "enum", 1, std_enum);
-	stdfun_add(ctx, "assert", 1, std_assert);
+		EXIT_FAILURE),
+		"return value indicating the unsuccessful exit of a "
+		"process");
+	stdfun_add(ctx, "help", 1, std_help, STD_HELP_DOC);
+	stdfun_add(ctx, "load", 1, std_load, STD_LOAD_DOC);
+	stdfun_add(ctx, "eval", 1, std_eval, STD_EVAL_DOC);
+	stdfun_add(ctx, "error", 1, std_error, STD_ERROR_DOC);
+	stdvar_add(ctx, "type",
+		make_map(lur_new_enum(ctx, TYPE_NAMES, 7)),
+		"type names");
+	stdfun_add(ctx, "type_of", 1, std_type_of,
+		STD_TYPE_OF_DOC);
+	stdfun_add(ctx, "default", 1, std_default,
+		STD_DEFAULT_DOC);
+	stdfun_add(ctx, "serialize", 1, std_serialize,
+		STD_SERIALIZE_DOC);
+	stdfun_add(ctx, "deserialize", 1, std_deserialize,
+		STD_DESERIALIZE_DOC);
+	stdfun_add(ctx, "as_number", 1, std_as_number,
+		STD_AS_NUMBER_DOC);
+	stdfun_add(ctx, "as_text", 1, std_as_text,
+		STD_AS_TEXT_DOC);
+	stdfun_add(ctx, "loop", 2, std_loop,
+		STD_LOOP_DOC);
+	stdfun_add(ctx, "while", 1, std_while,
+		STD_WHILE_DOC);
+	stdfun_add(ctx, "range", 2, std_range,
+		STD_RANGE_DOC);
+	stdfun_add(ctx, "range_inc", 2, std_range_inc,
+		STD_RANGE_INC_DOC);
+	stdfun_add(ctx, "default_sort", 2, std_default_sort,
+		STD_DEFAULT_SORT_DOC);
+	stdfun_add(ctx, "enum", 1, std_enum,
+		STD_ENUM_DOC);
+	stdfun_add(ctx, "assert", 1, std_assert,
+		STD_ASSERT_DOC);
 	
-	std_set_map(ctx, "time");
-	stdfun_add(ctx, "now", 0, std_time_now);
-	stdfun_add(ctx, "year", 0, std_time_year);
-	stdfun_add(ctx, "month", 0, std_time_month);
-	stdfun_add(ctx, "day", 0, std_time_day);
-	stdfun_add(ctx, "hour", 0, std_time_hour);
-	stdfun_add(ctx, "minute", 0, std_time_minute);
-	stdfun_add(ctx, "second", 0, std_time_second);
-	stdfun_add(ctx, "timestamp", 0, std_time_timestamp);
-	stdfun_add(ctx, "clock", 0, std_time_clock);
-	stdfun_add(ctx, "sleep", 1, std_time_sleep);
-	std_set_map(ctx, NULL);
+	std_set_module(ctx, "mem");
+	stdfun_add(ctx, "addr", 1, std_mem_addr,
+		STD_MEM_ADDR_DOC);
+	stdfun_add(ctx, "copy", 1, std_mem_copy,
+		STD_MEM_COPY_DOC);
+	stdfun_add(ctx, "deep_copy", 1, std_mem_copy,
+		STD_MEM_DEEP_COPY_DOC);
+	stdfun_add(ctx, "total_ram", 0, std_mem_total_ram,
+		STD_MEM_TOTAL_RAM_DOC);
+	stdfun_add(ctx, "free_ram", 0, std_mem_free_ram,
+		STD_MEM_FREE_RAM_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "system");
+	std_set_module(ctx, "time");
+	stdfun_add(ctx, "now", 0, std_time_now,
+		STD_TIME_NOW_DOC);
+	stdfun_add(ctx, "year", 0, std_time_year,
+		STD_TIME_YEAR_DOC);
+	stdfun_add(ctx, "month", 0, std_time_month,
+		STD_TIME_MONTH_DOC);
+	stdfun_add(ctx, "day", 0, std_time_day,
+		STD_TIME_DAY_DOC);
+	stdfun_add(ctx, "hour", 0, std_time_hour,
+		STD_TIME_HOUR_DOC);
+	stdfun_add(ctx, "minute", 0, std_time_minute,
+		STD_TIME_MINUTE_DOC);
+	stdfun_add(ctx, "second", 0, std_time_second,
+		STD_TIME_SECOND_DOC);
+	stdfun_add(ctx, "timestamp", 0, std_time_timestamp,
+		STD_TIME_TIMESTAMP_DOC);
+	stdfun_add(ctx, "clock", 0, std_time_clock,
+		STD_TIME_CLOCK_DOC);
+	stdfun_add(ctx, "sleep", 1, std_time_sleep,
+		STD_TIME_SLEEP_DOC);
+	std_set_module(ctx, NULL);
+	
+	std_set_module(ctx, "system");
 	stdvar_add(ctx, "VERSION",
-		make_text(text_lit(LUR_VERSION, ctx)));
+		make_text(text_lit(LUR_VERSION, ctx)),
+		"lur version.");
 	stdvar_add(ctx, "PLATFORM",
-		make_text(text_lit(system_get_platform(), ctx)));
+		make_text(text_lit(system_get_platform(), ctx)),
+		"operating system.");
 	stdvar_add(ctx, "COMPILER_VERSION",
-		make_text(text_lit(__VERSION__, ctx)));
+		make_text(text_lit(__VERSION__, ctx)),
+		"compiler version.");
 	stdvar_add(ctx, "BUILD_TIME",
-		make_text(text_lit(__TIMESTAMP__, ctx)));
-	stdvar_add(ctx, "argv", make_array(ctx->argv));
-	stdfun_add(ctx, "uptime", 0, std_system_uptime);
-	stdfun_add(ctx, "total_ram", 0, std_system_total_ram);
-	stdfun_add(ctx, "free_ram", 0, std_system_free_ram);
+		make_text(text_lit(__TIMESTAMP__, ctx)),
+		"compile time.");
+	stdvar_add(ctx, "args", make_array(ctx->args),
+		"command line arguments.");
+	stdfun_add(ctx, "uptime", 0, std_system_uptime,
+		STD_SYSTEM_UPTIME_DOC);
 	stdfun_add(ctx, "average_load", 0,
-		std_system_average_load);
+		std_system_average_load,
+		STD_SYSTEM_AVERAGE_LOAD_DOC);
 	stdfun_add(ctx, "process_count", 0,
-		std_system_process_count);
-	stdfun_add(ctx, "cmd", 1, std_system_cmd);
-	stdfun_add(ctx, "exit", 1, std_system_exit);
-	std_set_map(ctx, NULL);
+		std_system_process_count,
+		STD_SYSTEM_PROCESS_COUNT_DOC);
+	stdfun_add(ctx, "cmd", 1, std_system_cmd,
+		STD_SYSTEM_CMD_DOC);
+	stdfun_add(ctx, "exit", 1, std_system_exit,
+		STD_SYSTEM_EXIT_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "math");
-	stdvar_add(ctx, "PI", make_number(M_PI));
-	stdvar_add(ctx, "E", make_number(M_E));
-	stdvar_add(ctx, "INF", make_number(INFINITY));
-	stdvar_add(ctx, "NAN", make_number(NAN));
-	stdfun_add(ctx, "eqf", 3, std_math_eqf);
-	stdfun_add(ctx, "bit_shl", 2, std_math_bit_shl);
-	stdfun_add(ctx, "bit_shr", 2, std_math_bit_shr);
-	stdfun_add(ctx, "bit_and", 2, std_math_bit_and);
-	stdfun_add(ctx, "bit_or", 2, std_math_bit_or);
-	stdfun_add(ctx, "bit_xor", 2, std_math_bit_xor);
-	stdfun_add(ctx, "bit_not", 1, std_math_bit_not);
-	stdfun_add(ctx, "log", 2, std_math_log);
-	stdfun_add(ctx, "sqrt", 1, std_math_sqrt);
-	stdfun_add(ctx, "squared", 1, std_math_squared);
-	stdfun_add(ctx, "abs", 1, std_math_abs);
-	stdfun_add(ctx, "min", 2, std_math_min);
-	stdfun_add(ctx, "max", 2, std_math_max);
-	stdfun_add(ctx, "clip", 3, std_math_clip);
-	stdfun_add(ctx, "lerp", 3, std_math_lerp);
-	stdfun_add(ctx, "interp_to", 4, std_math_interp_to);
-	stdfun_add(ctx, "floor", 1, std_math_floor);
-	stdfun_add(ctx, "ceil", 1, std_math_ceil);
-	stdfun_add(ctx, "round", 1, std_math_round);
-	stdfun_add(ctx, "rad", 1, std_math_rad);
-	stdfun_add(ctx, "deg", 1, std_math_deg);
-	stdfun_add(ctx, "sin", 1, std_math_sin);
-	stdfun_add(ctx, "cos", 1, std_math_cos);
-	stdfun_add(ctx, "tan", 1, std_math_tan);
-	stdfun_add(ctx, "asin", 1, std_math_asin);
-	stdfun_add(ctx, "acos", 1, std_math_acos);
-	stdfun_add(ctx, "atan", 1, std_math_atan);
-	stdfun_add(ctx, "atan2", 2, std_math_atan2);
-	stdfun_add(ctx, "sinh", 1, std_math_sinh);
-	stdfun_add(ctx, "cosh", 1, std_math_cosh);
-	stdfun_add(ctx, "tanh", 1, std_math_tanh);
-	stdfun_add(ctx, "asinh", 1, std_math_asinh);
-	stdfun_add(ctx, "acosh", 1, std_math_acosh);
-	stdfun_add(ctx, "atanh", 1, std_math_atanh);
-	stdfun_add(ctx, "is_even", 1, std_math_is_even);
-	stdfun_add(ctx, "is_odd", 1, std_math_is_odd);
-	stdfun_add(ctx, "is_prime", 1, std_math_is_prime);
-	stdfun_add(ctx, "hex", 1, std_math_hex);
-	stdfun_add(ctx, "bin", 1, std_math_bin);
-	stdfun_add(ctx, "hash", 1, std_math_hash);
-	std_set_map(ctx, NULL);
+	std_set_module(ctx, "math");
+	stdvar_add(ctx, "PI", make_number(M_PI),
+		"the value of pi (π).");
+	stdvar_add(ctx, "E", make_number(M_E),
+		"Euler's number.");
+	stdvar_add(ctx, "INF", make_number(INFINITY),
+		"a value representing infinity.");
+	stdvar_add(ctx, "NAN", make_number(NAN),
+		"value representing Not a Number.");
+	stdfun_add(ctx, "eqf", 3, std_math_eqf,
+		STD_MATH_EQF_DOC);
+	stdfun_add(ctx, "bit_shl", 2, std_math_bit_shl,
+		STD_MATH_BIT_SHL_DOC);
+	stdfun_add(ctx, "bit_shr", 2, std_math_bit_shr,
+		STD_MATH_BIT_SHR_DOC);
+	stdfun_add(ctx, "bit_and", 2, std_math_bit_and,
+		STD_MATH_BIT_AND_DOC);
+	stdfun_add(ctx, "bit_or", 2, std_math_bit_or,
+		STD_MATH_BIT_OR_DOC);
+	stdfun_add(ctx, "bit_xor", 2, std_math_bit_xor,
+		STD_MATH_BIT_XOR_DOC);
+	stdfun_add(ctx, "bit_not", 1, std_math_bit_not,
+		STD_MATH_BIT_NOT_DOC);
+	stdfun_add(ctx, "log", 2, std_math_log,
+		STD_MATH_LOG_DOC);
+	stdfun_add(ctx, "sqrt", 1, std_math_sqrt,
+		STD_MATH_SQRT_DOC);
+	stdfun_add(ctx, "squared", 1, std_math_squared,
+		STD_MATH_SQUARED_DOC);
+	stdfun_add(ctx, "abs", 1, std_math_abs,
+		STD_MATH_ABS_DOC);
+	stdfun_add(ctx, "min", 2, std_math_min,
+		STD_MATH_MIN_DOC);
+	stdfun_add(ctx, "max", 2, std_math_max,
+		STD_MATH_MAX_DOC);
+	stdfun_add(ctx, "clip", 3, std_math_clip,
+		STD_MATH_CLIP_DOC);
+	stdfun_add(ctx, "lerp", 3, std_math_lerp,
+		STD_MATH_LERP_DOC);
+	stdfun_add(ctx, "interp_to", 4, std_math_interp_to,
+		STD_MATH_INTERP_TO_DOC);
+	stdfun_add(ctx, "floor", 1, std_math_floor,
+		STD_MATH_FLOOR_DOC);
+	stdfun_add(ctx, "ceil", 1, std_math_ceil,
+		STD_MATH_CEIL_DOC);
+	stdfun_add(ctx, "round", 1, std_math_round,
+		STD_MATH_ROUND_DOC);
+	stdfun_add(ctx, "rad", 1, std_math_rad,
+		STD_MATH_RAD_DOC);
+	stdfun_add(ctx, "deg", 1, std_math_deg,
+		STD_MATH_DEG_DOC);
+	stdfun_add(ctx, "sin", 1, std_math_sin,
+		STD_MATH_SIN_DOC);
+	stdfun_add(ctx, "cos", 1, std_math_cos,
+		STD_MATH_COS_DOC);
+	stdfun_add(ctx, "tan", 1, std_math_tan,
+		STD_MATH_TAN_DOC);
+	stdfun_add(ctx, "asin", 1, std_math_asin,
+		STD_MATH_ASIN_DOC);
+	stdfun_add(ctx, "acos", 1, std_math_acos,
+		STD_MATH_ACOS_DOC);
+	stdfun_add(ctx, "atan", 1, std_math_atan,
+		STD_MATH_ATAN_DOC);
+	stdfun_add(ctx, "atan2", 2, std_math_atan2,
+		STD_MATH_ATAN2_DOC);
+	stdfun_add(ctx, "sinh", 1, std_math_sinh,
+		STD_MATH_SINH_DOC);
+	stdfun_add(ctx, "cosh", 1, std_math_cosh,
+		STD_MATH_COSH_DOC);
+	stdfun_add(ctx, "tanh", 1, std_math_tanh,
+		STD_MATH_TANH_DOC);
+	stdfun_add(ctx, "asinh", 1, std_math_asinh,
+		STD_MATH_ASINH_DOC);
+	stdfun_add(ctx, "acosh", 1, std_math_acosh,
+		STD_MATH_ACOSH_DOC);
+	stdfun_add(ctx, "atanh", 1, std_math_atanh,
+		STD_MATH_ATANH_DOC);
+	stdfun_add(ctx, "is_even", 1, std_math_is_even,
+		STD_MATH_IS_EVEN_DOC);
+	stdfun_add(ctx, "is_odd", 1, std_math_is_odd,
+		STD_MATH_IS_ODD_DOC);
+	stdfun_add(ctx, "is_prime", 1, std_math_is_prime,
+		STD_MATH_IS_PRIME_DOC);
+	stdfun_add(ctx, "hex", 1, std_math_hex,
+		STD_MATH_HEX_DOC);
+	stdfun_add(ctx, "bin", 1, std_math_bin,
+		STD_MATH_BIN_DOC);
+	stdfun_add(ctx, "hash", 1, std_math_hash,
+		STD_MATH_HASH_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "vec");
+	std_set_module(ctx, "vec");
 	stdvar_add(ctx, "X", make_array(lur_new_num_array(
-		(const double[]){1, 0, 0}, 3, ctx)));
+		(const double[]){1, 0, 0}, 3, ctx)), "global X axis");
 	stdvar_add(ctx, "Y", make_array(lur_new_num_array(
-		(const double[]){0, 1, 0}, 3, ctx)));
+		(const double[]){0, 1, 0}, 3, ctx)), "global Y axis");
 	stdvar_add(ctx, "Z", make_array(lur_new_num_array(
-		(const double[]){0, 0, 1}, 3, ctx)));
-	stdfun_add(ctx, "size", 1, std_vec_size);
-	stdfun_add(ctx, "norm", 1, std_vec_norm);
-	stdfun_add(ctx, "dot", 2, std_vec_dot);
-	stdfun_add(ctx, "cross", 2, std_vec_cross);
-	stdfun_add(ctx, "interp_to", 4, std_vec_interp_to);
-	std_set_map(ctx, NULL);
+		(const double[]){0, 0, 1}, 3, ctx)), "global Z axis");
+	stdfun_add(ctx, "size", 1, std_vec_size,
+		STD_VEC_SIZE_DOC);
+	stdfun_add(ctx, "norm", 1, std_vec_norm,
+		STD_VEC_NORM_DOC);
+	stdfun_add(ctx, "dot", 2, std_vec_dot,
+		STD_VEC_DOT_DOC);
+	stdfun_add(ctx, "cross", 2, std_vec_cross,
+		STD_VEC_CROSS_DOC);
+	stdfun_add(ctx, "interp_to", 4, std_vec_interp_to,
+		STD_VEC_INTERP_TO_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "rand");
-	stdfun_add(ctx, "seed", 1, std_rand_seed);
-	stdfun_add(ctx, "number", 2, std_rand_number);
-	stdfun_add(ctx, "text", 2, std_rand_text);
-	stdfun_add(ctx, "item", 1, std_rand_item);
-	std_set_map(ctx, NULL);
+	std_set_module(ctx, "rand");
+	stdfun_add(ctx, "seed", 1, std_rand_seed,
+		STD_RAND_SEED_DOC);
+	stdfun_add(ctx, "number", 2, std_rand_number,
+		STD_RAND_NUMBER_DOC);
+	stdfun_add(ctx, "text", 2, std_rand_text,
+		STD_RAND_TEXT_DOC);
+	stdfun_add(ctx, "item", 1, std_rand_item,
+		STD_RAND_ITEM_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "text");
+	std_set_module(ctx, "text");
 	stdvar_add(ctx, "LETTERS", make_text(
-		text_lit("abcdefghijklmnopqrstuvwxyz", ctx)));
+		text_lit("abcdefghijklmnopqrstuvwxyz", ctx)),
+		"all ASCII letters, in lowercase, a-z.");
 	stdvar_add(ctx, "DIGITS", make_text(
-		text_lit("0123456789", ctx)));
+		text_lit("0123456789", ctx)),
+		"all ASCII digits, 0-9.");
 	stdvar_add(ctx, "PUNCTUATION", make_text(
-		text_lit("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", ctx)));
+		text_lit("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", ctx)), 
+		"all ASCII punctuation characters.");
 	stdvar_add(ctx, "WHITESPACE", make_text(
-		text_lit(" \t\n\r", ctx)));
+		text_lit(" \t\n\r", ctx)),
+		"all whitespace characters.");
 	stdvar_add(ctx, "NEWLINE", make_text(
-		text_lit("\n", ctx)));
-	stdfun_add(ctx, "len", 1, std_text_len);
-	stdfun_add(ctx, "cmp", 2, std_text_cmp);
-	stdfun_add(ctx, "bytes", 1, std_text_bytes);
-	stdfun_add(ctx, "ascii", 1, std_text_ascii);
-	stdfun_add(ctx, "words", 2, std_text_words);
-	stdfun_add(ctx, "slice", 3, std_text_slice);
-	stdfun_add(ctx, "as_upper", 1, std_text_as_upper);
-	stdfun_add(ctx, "as_lower", 1, std_text_as_lower);
-	stdfun_add(ctx, "is_upper", 1, std_text_is_upper);
-	stdfun_add(ctx, "is_lower", 1, std_text_is_lower);
-	stdfun_add(ctx, "starts_with", 2, std_text_starts_with);
-	stdfun_add(ctx, "ends_with", 2, std_text_ends_with);
-	stdfun_add(ctx, "trim_left", 1, std_text_trim_left);
-	stdfun_add(ctx, "trim_right", 1, std_text_trim_right);
-	stdfun_add(ctx, "trim", 1,  std_text_trim);
-	stdfun_add(ctx, "left_pad", 3, std_text_left_pad);
-	stdfun_add(ctx, "right_pad", 3, std_text_right_pad);
-	stdfun_add(ctx, "pad", 3,  std_text_pad);
-	stdfun_add(ctx, "find", 3, std_text_find);
-	stdfun_add(ctx, "replace_all", 3, std_text_replace_all);
-	stdfun_add(ctx, "edit_dist", 2, std_text_edit_dist);
-	stdfun_add(ctx, "ratio", 2, std_text_ratio);
-	std_set_map(ctx, NULL);
+		text_lit("\n", ctx)),
+		"newline string for the system.");
+	stdfun_add(ctx, "len", 1, std_text_len,
+		STD_TEXT_LEN_DOC);
+	stdfun_add(ctx, "cmp", 2, std_text_cmp,
+		STD_TEXT_CMP_DOC);
+	stdfun_add(ctx, "bytes", 1, std_text_bytes,
+		STD_TEXT_BYTES_DOC);
+	stdfun_add(ctx, "ascii", 1, std_text_ascii,
+		STD_TEXT_ASCII_DOC);
+	stdfun_add(ctx, "words", 2, std_text_words,
+		STD_TEXT_WORDS_DOC);
+	stdfun_add(ctx, "slice", 3, std_text_slice,
+		STD_TEXT_SLICE_DOC);
+	stdfun_add(ctx, "repeat", 2, std_text_repeat,
+		STD_TEXT_REPEAT_DOC);
+	stdfun_add(ctx, "as_upper", 1, std_text_as_upper,
+		STD_TEXT_AS_UPPER_DOC);
+	stdfun_add(ctx, "as_lower", 1, std_text_as_lower,
+		STD_TEXT_AS_LOWER_DOC);
+	stdfun_add(ctx, "is_upper", 1, std_text_is_upper,
+		STD_TEXT_IS_UPPER_DOC);
+	stdfun_add(ctx, "is_lower", 1, std_text_is_lower,
+		STD_TEXT_IS_LOWER_DOC);
+	stdfun_add(ctx, "starts_with", 2, std_text_starts_with,
+		STD_TEXT_STARTS_WITH_DOC);
+	stdfun_add(ctx, "ends_with", 2, std_text_ends_with,
+		STD_TEXT_ENDS_WITH_DOC);
+	stdfun_add(ctx, "trim_left", 1, std_text_trim_left,
+		STD_TEXT_TRIM_LEFT_DOC);
+	stdfun_add(ctx, "trim_right", 1, std_text_trim_right,
+		STD_TEXT_TRIM_RIGHT_DOC);
+	stdfun_add(ctx, "trim", 1,  std_text_trim,
+		STD_TEXT_TRIM_DOC);
+	stdfun_add(ctx, "left_pad", 3, std_text_left_pad,
+		STD_TEXT_LEFT_PAD_DOC);
+	stdfun_add(ctx, "right_pad", 3, std_text_right_pad,
+		STD_TEXT_RIGHT_PAD_DOC);
+	stdfun_add(ctx, "pad", 3,  std_text_pad,
+		STD_TEXT_PAD_DOC);
+	stdfun_add(ctx, "find", 3, std_text_find,
+		STD_TEXT_FIND_DOC);
+	stdfun_add(ctx, "replace_all", 3, std_text_replace_all,
+		STD_TEXT_REPLACE_ALL_DOC);
+	stdfun_add(ctx, "edit_dist", 2, std_text_edit_dist,
+		STD_TEXT_EDIT_DIST_DOC);
+	stdfun_add(ctx, "ratio", 2, std_text_ratio,
+		STD_TEXT_RATIO_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "array");
-	stdfun_add(ctx, "len", 1, std_array_len);
-	stdfun_add(ctx, "get", 2, std_array_get);
-	stdfun_add(ctx, "set", 3, std_array_set);
-	stdfun_add(ctx, "insert", 3, std_array_insert);
-	stdfun_add(ctx, "del", 2, std_array_del);
-	stdfun_add(ctx, "pop", 1, std_array_pop);
-	stdfun_add(ctx, "head", 1, std_array_head);
-	stdfun_add(ctx, "tail", 1, std_array_tail);
-	stdfun_add(ctx, "last", 1, std_array_last);
-	stdfun_add(ctx, "fill", 2, std_array_fill);
-	stdfun_add(ctx, "repeat", 2, std_array_repeat);
-	stdfun_add(ctx, "rotate", 2, std_array_rotate);
-	stdfun_add(ctx, "count", 2, std_array_count);
-	stdfun_add(ctx, "contains", 2, std_array_contains);
-	stdfun_add(ctx, "find", 3, std_array_find);
-	stdfun_add(ctx, "iter", 2, std_array_iter);
-	stdfun_add(ctx, "iteri", 2, std_array_iteri);
-	stdfun_add(ctx, "map", 2, std_array_map);
-	stdfun_add(ctx, "filter", 2, std_array_filter);
-	stdfun_add(ctx, "fold", 3, std_array_fold);
-	stdfun_add(ctx, "flat", 1, std_array_flat);
-	stdfun_add(ctx, "dedup", 1, std_array_dedup);
-	stdfun_add(ctx, "sum", 1, std_array_sum);
-	stdfun_add(ctx, "average", 1, std_array_average);
-	stdfun_add(ctx, "mean", 1, std_array_mean);
-	stdfun_add(ctx, "any", 2, std_array_any);
-	stdfun_add(ctx, "all", 2, std_array_all);
-	stdfun_add(ctx, "sort", 1, std_array_sort);
-	stdfun_add(ctx, "sort_by", 2, std_array_sort_by);
-	stdfun_add(ctx, "swap", 3, std_array_swap);
-	stdfun_add(ctx, "join", 1, std_array_join);
-	stdfun_add(ctx, "zip", 1, std_array_zip);
-	stdfun_add(ctx, "chunk", 2, std_array_chunk);
-	std_set_map(ctx, NULL);
+	std_set_module(ctx, "array");
+	stdfun_add(ctx, "len", 1, std_array_len,
+		STD_ARRAY_LEN_DOC);
+	stdfun_add(ctx, "get", 2, std_array_get,
+		STD_ARRAY_GET_DOC);
+	stdfun_add(ctx, "set", 3, std_array_set,
+		STD_ARRAY_SET_DOC);
+	stdfun_add(ctx, "insert", 3, std_array_insert,
+		STD_ARRAY_INSERT_DOC);
+	stdfun_add(ctx, "del", 2, std_array_del,
+		STD_ARRAY_DEL_DOC);
+	stdfun_add(ctx, "pop", 1, std_array_pop,
+		STD_ARRAY_POP_DOC);
+	stdfun_add(ctx, "head", 1, std_array_head,
+		STD_ARRAY_HEAD_DOC);
+	stdfun_add(ctx, "tail", 1, std_array_tail,
+		STD_ARRAY_TAIL_DOC);
+	stdfun_add(ctx, "last", 1, std_array_last,
+		STD_ARRAY_LAST_DOC);
+	stdfun_add(ctx, "fill", 2, std_array_fill,
+		STD_ARRAY_FILL_DOC);
+	stdfun_add(ctx, "repeat", 2, std_array_repeat,
+		STD_ARRAY_REPEAT_DOC);
+	stdfun_add(ctx, "rotate", 2, std_array_rotate,
+		STD_ARRAY_ROTATE_DOC);
+	stdfun_add(ctx, "count", 2, std_array_count,
+		STD_ARRAY_COUNT_DOC);
+	stdfun_add(ctx, "contains", 2, std_array_contains,
+		STD_ARRAY_CONTAINS_DOC);
+	stdfun_add(ctx, "find", 3, std_array_find,
+		STD_ARRAY_FIND_DOC);
+	stdfun_add(ctx, "iter", 2, std_array_iter,
+		STD_ARRAY_ITER_DOC);
+	stdfun_add(ctx, "iteri", 2, std_array_iteri,
+		STD_ARRAY_ITERI_DOC);
+	stdfun_add(ctx, "map", 2, std_array_map,
+		STD_ARRAY_FILTER_DOC);
+	stdfun_add(ctx, "filter", 2, std_array_filter,
+		STD_ARRAY_FILTER_DOC);
+	stdfun_add(ctx, "fold", 3, std_array_fold,
+		STD_ARRAY_FOLD_DOC);
+	stdfun_add(ctx, "flat", 1, std_array_flat,
+		STD_ARRAY_FLAT_DOC);
+	stdfun_add(ctx, "dedup", 1, std_array_dedup,
+		STD_ARRAY_DEDUP_DOC);
+	stdfun_add(ctx, "sum", 1, std_array_sum,
+		STD_ARRAY_SUM_DOC);
+	stdfun_add(ctx, "average", 1, std_array_average,
+		STD_ARRAY_AVERAGE_DOC);
+	stdfun_add(ctx, "median", 1, std_array_median,
+		STD_ARRAY_median_DOC);
+	stdfun_add(ctx, "any", 2, std_array_any,
+		STD_ARRAY_ANY_DOC);
+	stdfun_add(ctx, "all", 2, std_array_all,
+		STD_ARRAY_ALL_DOC);
+	stdfun_add(ctx, "sort", 1, std_array_sort,
+		STD_ARRAY_SORT_DOC);
+	stdfun_add(ctx, "sort_by", 2, std_array_sort_by,
+		STD_ARRAY_SORT_BY_DOC);
+	stdfun_add(ctx, "swap", 3, std_array_swap,
+		STD_ARRAY_SWAP_DOC);
+	stdfun_add(ctx, "join", 1, std_array_join,
+		STD_ARRAY_JOIN_DOC);
+	stdfun_add(ctx, "zip", 1, std_array_zip,
+		STD_ARRAY_ZIP_DOC);
+	stdfun_add(ctx, "chunk", 2, std_array_chunk,
+		STD_ARRAY_CHUNK_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "map");
-	stdfun_add(ctx, "len", 1, std_map_len);
-	stdfun_add(ctx, "get", 2, std_map_get);
-	stdfun_add(ctx, "set", 3, std_map_set);
-	stdfun_add(ctx, "del", 2, std_map_del);
-	stdfun_add(ctx, "has_key", 2, std_map_has_key);
-	stdfun_add(ctx, "has_value", 2, std_map_has_value);
-	stdfun_add(ctx, "keys", 1, std_map_keys);
-	stdfun_add(ctx, "values", 1, std_map_values);
-	stdfun_add(ctx, "kv_pairs", 1, std_map_kv_pairs);
+	std_set_module(ctx, "map");
+	stdfun_add(ctx, "len", 1, std_map_len,
+		STD_MAP_LEN_DOC);
+	stdfun_add(ctx, "get", 2, std_map_get,
+		STD_MAP_GET_DOC);
+	stdfun_add(ctx, "set", 3, std_map_set,
+		STD_MAP_SET_DOC);
+	stdfun_add(ctx, "del", 2, std_map_del,
+		STD_MAP_DEL_DOC);
+	stdfun_add(ctx, "has_key", 2, std_map_has_key,
+		STD_MAP_HAS_KEY_DOC);
+	stdfun_add(ctx, "has_value", 2, std_map_has_value,
+		STD_MAP_HAS_VALUE_DOC);
+	stdfun_add(ctx, "keys", 1, std_map_keys,
+		STD_MAP_KEYS_DOC);
+	stdfun_add(ctx, "values", 1, std_map_values,
+		STD_MAP_VALUES_DOC);
+	stdfun_add(ctx, "kv_pairs", 1, std_map_kv_pairs,
+		STD_MAP_KV_PAIRS_DOC);
 	stdfun_add(ctx, "from_kv_pairs", 1,
-		std_map_from_kv_pairs);
-	stdfun_add(ctx, "iter", 2, std_map_iter);
-	stdfun_add(ctx, "iteri", 2, std_map_iteri);
+		std_map_from_kv_pairs,
+		STD_MAP_FROM_KV_PAIRS_DOC);
+	stdfun_add(ctx, "iter", 2, std_map_iter,
+		STD_MAP_ITER_DOC);
+	stdfun_add(ctx, "iteri", 2, std_map_iteri,
+		STD_MAP_ITERI_DOC);
 	stdfun_add(ctx, "get_or_default", 3,
-		std_map_get_or_default);
-	std_set_map(ctx, NULL);
+		std_map_get_or_default,
+		STD_MAP_GET_OR_DEFAULT_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "thread");
-	stdfun_add(ctx, "spawn", 2, std_thread_spawn);
-	stdfun_add(ctx, "join", 1, std_thread_join);
-	std_set_map(ctx, NULL);
+	std_set_module(ctx, "thread");
+	stdfun_add(ctx, "spawn", 2, std_thread_spawn,
+		STD_THREAD_SPAWN_DOC);
+	stdfun_add(ctx, "join", 1, std_thread_join,
+		STD_THREAD_JOIN_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "io");
-	stdfun_add(ctx, "print", 1, std_io_print);
-	stdfun_add(ctx, "print_ln", 1, std_io_print_ln);
-	stdfun_add(ctx, "read_ln", 0, std_io_read_ln);
-	stdfun_add(ctx, "read", 1, std_io_read);
-	stdfun_add(ctx, "write", 2, std_io_write);
-	stdfun_add(ctx, "append", 2, std_io_append);
-	stdfun_add(ctx, "size", 1, std_io_size);
-	stdfun_add(ctx, "dir_exists", 1, std_io_dir_exists);
-	stdfun_add(ctx, "make_dir", 1, std_io_make_dir);
-	stdfun_add(ctx, "list_dir", 1, std_io_list_dir);
-	stdfun_add(ctx, "del", 1, std_io_del);
-	std_set_map(ctx, NULL);
+	std_set_module(ctx, "io");
+	stdfun_add(ctx, "print", 1, std_io_print,
+		STD_IO_PRINT_DOC);
+	stdfun_add(ctx, "input", 0, std_io_input,
+		STD_IO_INPUT_DOC);
+	stdfun_add(ctx, "read", 1, std_io_read,
+		STD_IO_READ_DOC);
+	stdfun_add(ctx, "write", 2, std_io_write,
+		STD_IO_WRITE_DOC);
+	stdfun_add(ctx, "append", 2, std_io_append,
+		STD_IO_APPEND_DOC);
+	stdfun_add(ctx, "size", 1, std_io_size,
+		STD_IO_SIZE_DOC);
+	stdfun_add(ctx, "dir_exists", 1, std_io_dir_exists,
+		STD_IO_DIR_EXISTS_DOC);
+	stdfun_add(ctx, "make_dir", 1, std_io_make_dir,
+		STD_IO_MAKE_DIR_DOC);
+	stdfun_add(ctx, "list_dir", 1, std_io_list_dir,
+		STD_IO_LIST_DIR_DOC);
+	stdfun_add(ctx, "del", 1, std_io_del,
+		STD_IO_DEL_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "socket");
+	std_set_module(ctx, "socket");
 	stdvar_add(ctx, "LOCALHOST",
-		make_text(text_lit("127.0.0.1", ctx)));
+		make_text(text_lit("127.0.0.1", ctx)),
+		"the localhost address.");
 	const char* socket_type[] = {"Stream", "Datagram"};
 	stdvar_add(ctx, "type",
-		make_map(lur_new_enum(ctx, socket_type, 2)));
-	stdfun_add(ctx, "create", 1, std_socket_create);
-	stdfun_add(ctx, "connect", 3, std_socket_connect);
-	stdfun_add(ctx, "bind", 3, std_socket_bind);
-	stdfun_add(ctx, "listen", 2, std_socket_listen);
-	stdfun_add(ctx, "accept", 1, std_socket_accept);
-	stdfun_add(ctx, "send", 2, std_socket_send);
-	stdfun_add(ctx, "recv", 1, std_socket_recv);
-	stdfun_add(ctx, "close", 1, std_socket_close);
-	std_set_map(ctx, NULL);
+		make_map(lur_new_enum(ctx, socket_type, 2)),
+		"the type of the socket.");
+	stdfun_add(ctx, "create", 1, std_socket_create,
+		STD_SOCKET_CREATE_DOC);
+	stdfun_add(ctx, "connect", 3, std_socket_connect,
+		STD_SOCKET_CONNECT_DOC);
+	stdfun_add(ctx, "bind", 3, std_socket_bind,
+		STD_SOCKET_BIND_DOC);
+	stdfun_add(ctx, "listen", 2, std_socket_listen,
+		STD_SOCKET_LISTEN_DOC);
+	stdfun_add(ctx, "accept", 1, std_socket_accept,
+		STD_SOCKET_ACCEPT_DOC);
+	stdfun_add(ctx, "send", 2, std_socket_send,
+		STD_SOCKET_SEND_DOC);
+	stdfun_add(ctx, "recv", 1, std_socket_recv,
+		STD_SOCKET_RECV_DOC);
+	stdfun_add(ctx, "close", 1, std_socket_close,
+		STD_SOCKET_CLOSE_DOC);
+	std_set_module(ctx, NULL);
 	
-	std_set_map(ctx, "value");
-	stdvar_add(ctx, "type",
-		make_map(lur_new_enum(ctx, TYPE_NAMES, 7)));
-	stdfun_add(ctx, "type_of", 1, std_value_type_of);
-	stdfun_add(ctx, "default", 1, std_value_default);
-	stdfun_add(ctx, "serialize", 1, std_value_serialize);
-	stdfun_add(ctx, "deserialize", 1, std_value_deserialize);
-	std_set_map(ctx, NULL);
-	
-	std_set_map(ctx, "debug");
-	stdfun_add(ctx, "stats", 0, std_debug_stats);
-	stdfun_add(ctx, "set_alloc_hook", 1,
-		std_debug_set_alloc_hook);
-	std_set_map(ctx, NULL);
-	
-	#if LUR_INCLUDE_SDL
-	std_set_map(ctx, "color");
-	stdvar_add(ctx, "BLACK", make_array(
-		lur_new_num_array(
-			(const double[]){0, 0, 0, 1}, 4, ctx)));
-	stdvar_add(ctx, "DARK_GRAY", make_array(
-		lur_new_num_array(
-			(const double[]){0.25, 0.25, 0.25, 1}, 4, ctx)));
-	stdvar_add(ctx, "GRAY", make_array(
-		lur_new_num_array(
-			(const double[]){0.5, 0.5, 0.5, 1}, 4, ctx)));
-	stdvar_add(ctx, "WHITE", make_array(
-		lur_new_num_array(
-			(const double[]){1, 1, 1, 1}, 4, ctx)));
-	stdvar_add(ctx, "RED", make_array(
-		lur_new_num_array(
-			(const double[]){1, 0, 0, 1}, 4, ctx)));
-	stdvar_add(ctx, "GREEN", make_array(
-		lur_new_num_array(
-			(const double[]){0, 1, 0, 1}, 4, ctx)));
-	stdvar_add(ctx, "BLUE", make_array(
-		lur_new_num_array(
-			(const double[]){0, 0, 1, 1}, 4, ctx)));
-	std_set_map(ctx, NULL);
-	
-	stdvar_add(ctx, "event", make_map(
-		lur_new_enum(ctx, EVENT_NAMES, MAX_EVENTS)));
-		
-	std_set_map(ctx, "engine");
-	stdfun_add(ctx, "init", 0, std_engine_init);
-	stdfun_add(ctx, "shutdown", 0, std_engine_shutdown);
-	stdfun_add(ctx, "set_event_handler", 2,
-		std_engine_set_event_handler);
-	stdfun_add(ctx, "update", 0, std_engine_update);
-	stdfun_add(ctx, "frame_time", 0,
-		std_engine_frame_time);
-	stdfun_add(ctx, "total_time", 0, std_engine_total_time);
-	std_set_map(ctx, NULL);
-	
-	std_set_map(ctx, "video");
-	stdfun_add(ctx, "init", 3, std_video_init);
-	stdfun_add(ctx, "load_tex", 1, std_video_load_tex);
-	stdfun_add(ctx, "clear", 1, std_video_clear);
-	stdfun_add(ctx, "set_pixel", 2, std_video_set_pixel);
-	stdfun_add(ctx, "draw_line", 4, std_video_draw_line);
-	stdfun_add(ctx, "draw_tex", 3, std_video_draw_tex);
-	stdfun_add(ctx, "render", 0, std_video_render);
-	stdfun_add(ctx, "shutdown", 0, std_video_shutdown);
-	std_set_map(ctx, NULL);
-	
-	std_set_map(ctx, "gui");
-	stdfun_add(ctx, "init", 2, std_gui_init);
-	stdfun_add(ctx, "draw_text", 3, std_gui_draw_text);
-	stdfun_add(ctx, "draw_button", 5, std_gui_draw_button);
-	stdfun_add(ctx, "shutdown", 0, std_gui_shutdown);
-	std_set_map(ctx, NULL);
-	
-	std_set_map(ctx, "audio");
-	stdvar_add(ctx, "MAX_VOLUME",
-		make_number(MIX_MAX_VOLUME));
-	stdfun_add(ctx, "init", 0, std_audio_init);
-	stdfun_add(ctx, "set_volume", 1, std_audio_set_volume);
-	stdfun_add(ctx, "get_volume", 0, std_audio_get_volume);
-	stdfun_add(ctx, "load", 1, std_audio_load);
-	stdfun_add(ctx, "load_music", 1, std_audio_load_music);
-	stdfun_add(ctx, "play", 1, std_audio_play);
-	stdfun_add(ctx, "play_music", 1, std_audio_play_music);
-	stdfun_add(ctx, "shutdown", 0, std_audio_shutdown);
-	std_set_map(ctx, NULL);
-	#endif
+	std_set_module(ctx, "debug");
+	stdfun_add(ctx, "stats", 0, std_debug_stats,
+		STD_DEBUG_STATS_DOC);
+	std_set_module(ctx, NULL);
 	
 	gc_resume(ctx);
 }
@@ -7859,6 +8153,7 @@ lur_t* lur_new(lur_config_t cfg, int argc, char** argv ) {
 	
 	ctx->cfg = cfg;
 	ctx->cur_vm = 0;
+	
 	ctx->mem.bytes = sizeof(lur_t);
 	ctx->mem.total = ctx->mem.bytes;
 	ctx->mem.next_gc = FIRST_GC_LIMIT;
@@ -7871,19 +8166,20 @@ lur_t* lur_new(lur_config_t cfg, int argc, char** argv ) {
 	
 	ctx->running = false;
 	ctx->interpreter = false;
+	
+	ctx->help = map_new(ctx);
+	
 	ctx->std_map = NULL;
 	ctx->std_map_name = NULL;
 	
 	ctx->thread_fref = NULL;
 	ctx->thread_args = NULL;
 	
-	ctx->argv = array_new(ctx);
+	ctx->args = array_new(ctx);
 	for (int i = 0; i < argc; i++)
-		array_push(ctx->argv,
+		array_push(ctx->args,
 			make_text(text_lit(argv[i], ctx)),
 			ctx);
-			
-	ctx->alloc_hook = NULL;
 	
 	vm_init(&ctx->vm, ctx);
 	stdlib_load(ctx);
@@ -7947,7 +8243,8 @@ bool lur_xfile(lur_t* ctx, const char* path) {
 }
 
 static void interpret(lur_t* ctx) {
-	lur_printf("%s\n", LUR_VERSION);
+	lur_printf("%s\n%s\n",
+		LUR_VERSION, LUR_REPL_GREETING);
 	ctx->interpreter = true;
 	for (;;) {
 		lur_printf(":: ");
