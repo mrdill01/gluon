@@ -1989,9 +1989,8 @@ static text_t* value_to_text_ex(
 	}
 	case TYPE_TEXT: {
 		if (quote_text) {
-			result = text_lit("\"", ctx);
-			result = text_concat(result, get_text(value), ctx);
-			result = text_concat(result, text_lit("\"", ctx), ctx);
+			result = text_fmt(ctx, "\"%s\"",
+				get_text(value)->buffer);
 		} else result = get_text(value);
 		break;
 	}
@@ -5953,7 +5952,8 @@ static value_t std_rand_seed(value_t* args, lur_t* ctx) {
 }
 
 #define STD_RAND_NUMBER_DOC \
-	"min, max\nreturns a random number between a and b."
+	"min, max\nreturns a random number between " \
+	"min and max."
 
 static value_t std_rand_number(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -6019,7 +6019,7 @@ static value_t std_text_bytes(value_t* args, lur_t* ctx) {
 	array_t* bytes = array_new(ctx);
 	for (size_t i = 0; i < text->len; i++)
 		array_push(bytes, make_text(text_new(
-			text->buffer[i], 1, ctx)), ctx);
+			text->buffer + i, 1, ctx)), ctx);
 	return make_array(bytes);
 }
 
