@@ -31,7 +31,6 @@
 #define LUR_DEBUG_PRINT_CODE 0
 #define LUR_DEBUG_PRINT_DATA 0
 #define LUR_DEBUG_PRINT_STACK 0
-#define LUR_DEBUG_PRINT_STDLIB 0
 #define LUR_DEBUG_PRINT_TOKENS 0
 #define LUR_DEBUG_PRINT_ALLOCS 0
 #define LUR_DEBUG_PRINT_MEM_STATS 1
@@ -332,9 +331,10 @@ typedef struct {
 
 typedef struct {
 	obj_t obj;
+	int64_t* indices;
 	map_entry_t* entries;
-	size_t len;
 	size_t cap;
+	size_t len;
 } map_t;
 
 typedef struct func_t func_t;
@@ -918,23 +918,21 @@ const char* lur_get_error(lur_t* ctx) {
 }
 
 static void print_error_line(const text_t* text, int line) {
-	int count = 0;
+	int count = 1;
+	size_t len = 0;
+	
 	for (size_t i = 0; i < text->len; i++) {
 		uint8_t ch = text->buffer[i];
-		if (ch == '\n') {
-			count++;
-		}
-		
-		if (count == line - 1) {
-			int end = -1;
+		if (ch == '\n') count++;
+		if (count == line) {
 			for (size_t j = i + 1; j < text->len; j++) {
-				uint8_t ch = text->buffer[j];
-				if (ch == '\n' || j == text->len - 1) {
-					end = j;
-					break;
-				}
+				ch = text->buffer[j];
+				len++;
+				
+				if (ch == '\n' || j == text->len - 1) break;
 			}
-			lur_eprintf("%.*s", text->len - end, text->buffer + i);
+			
+			lur_eprintf("%.*s\n", len, text->buffer + i);
 			break;
 		}
 	}
@@ -1593,9 +1591,10 @@ static map_t* map_new(lur_t* ctx) {
 	assert(ctx);
 	map_t* map = (map_t*)obj_new(
 		sizeof(map_t), TYPE_MAP, ctx);
+	map->indices = NULL;
 	map->entries = NULL;
-	map->len = 0;
 	map->cap = 0;
+	map->len = 0;
 	return map;
 }
 
@@ -1609,7 +1608,7 @@ static map_t* map_copy(
 	gc_pause(ctx);
 	map_t* dst = map_new(ctx);
 	
-	for (size_t i = 0; i < src->cap; i++) {
+	for (size_t i = 0; i < src->len; i++) {
 		const map_entry_t* entry = &src->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		
@@ -1641,10 +1640,13 @@ static bool map_eq(const map_t* a, const map_t* b) {
 	if (a->len != b->len) return false;
 	if (a->cap != b->cap) return false;
 	for (size_t i = 0; i < a->cap; i++) {
-		const map_entry_t* a_entry = &a->entries[i];
-		const map_entry_t* b_entry = &b->entries[i];
-		if (a_entry->key.tag == TYPE_NONE) continue;
-		if (b_entry->key.tag == TYPE_NONE) continue;
+		if (a->indices[i] == -1) continue;
+		if (b->indices[i] == -1) continue;
+		
+		const map_entry_t* a_entry = &a->entries[
+			a->indices[i]];
+		const map_entry_t* b_entry = &b->entries[
+			b->indices[i]];
 		
 		if (!value_eq(a_entry->key, b_entry->key))
 			return false;
@@ -1655,10 +1657,28 @@ static bool map_eq(const map_t* a, const map_t* b) {
 	return true;
 }
 
+static void map_debug(const map_t* map) {
+	printf("cap %d, len %d\n", map->cap, map->len);
+	puts("indices:");
+	for (int64_t i = 0; i < map->cap; i++) {
+		printf("%d ", i);
+	}
+	printf("\n");
+	
+	for (int64_t i = 0; i < map->cap; i++) {
+		printf("%d ", map->indices[i]);
+	}
+	printf("\n");
+}
+
 static uint32_t value_hash(value_t, lur_t*);
 
-static map_entry_t* map_find_entry(
-	map_entry_t* entries, size_t cap, value_t key, lur_t* ctx)
+/*static map_entry_t* map_find_entry(
+	int64_t* indices,
+	map_entry_t* entries,
+	size_t cap,
+	value_t key,
+	lur_t* ctx)
 {
 	assert(entries);
 	uint32_t hash = value_hash(key, ctx);
@@ -1666,9 +1686,12 @@ static map_entry_t* map_find_entry(
 	map_entry_t* tombstone = NULL;
 	
 	for (;;) {
-		map_entry_t* entry = &entries[index];
+		int64_t ind = indices[index];
+		map_entry_t* entry = &entries[ind];
+		printf("%d %d\n", index, ind);
 		
-		if (entry->key.tag == TYPE_NONE) {
+		//if (entry->key.tag == TYPE_NONE) {
+		if (ind == -1) {
 			if (entry->value.tag == TYPE_NONE)
 				return (tombstone) ? tombstone : entry;
 			else if (!tombstone)
@@ -1679,16 +1702,53 @@ static map_entry_t* map_find_entry(
 		
 		index = (index + 1) & (cap - 1);
 	}
+}*/
+
+static int64_t map_find_index(
+	int64_t* indices,
+	map_entry_t* entries,
+	size_t cap,
+	size_t len,
+	value_t key,
+	lur_t* ctx)
+{
+	assert(entries);
+	uint32_t hash = value_hash(key, ctx);
+	uint32_t index = hash & (cap - 1);
+	map_entry_t* tombstone = NULL;
+	
+	for (;;) {
+		if (indices[index] == -1) {
+			indices[index] = len;
+			map_entry_t* entry = &entries[indices[index]];
+			entry->key = make_none();
+			entry->value = make_none();
+			return indices[index];
+			/*if (entry->value.tag == TYPE_NONE)
+				return (tombstone) ? tombstone : entry;
+			else if (!tombstone)
+				tombstone = entry;*/
+		} else {
+			const map_entry_t* entry = &entries[indices[index]];
+			if (value_eq(entry->key, key))
+				return indices[index];
+		}
+		
+		index = (index + 1) & (cap - 1);
+	}
 }
 
 static void map_set_cap(
 	map_t* map, size_t cap, lur_t* ctx)
 {
 	assert(map && ctx);
+	int64_t* indices = mem_alloc(
+		ctx, sizeof(int64_t) * cap);
 	map_entry_t* entries = mem_alloc(
 		ctx, sizeof(map_entry_t) * cap);
 	
 	for (size_t i = 0; i < cap; i++) {
+		indices[i] = -1;
 		entries[i].key = make_none();
 		entries[i].value = make_none();
 	}
@@ -1698,29 +1758,44 @@ static void map_set_cap(
 		const map_entry_t* src = &map->entries[i];
 		if (src->key.tag == TYPE_NONE) continue;
 		
-		map_entry_t* dst = map_find_entry(
-			entries, cap, src->key, ctx);
+		int64_t index = map_find_index(
+			indices, entries, cap, map->len, src->key, ctx);
+		map_entry_t* dst = &entries[index];
+		
+		indices[i] = map->indices[i];
 		dst->key = src->key;
 		dst->value = src->value;
 		map->len++;
 	}
 	
+	arr_free(ctx, map->indices, int64_t, map->cap);
 	arr_free(ctx, map->entries, map_entry_t, map->cap);
+	map->indices = indices;
 	map->entries = entries;
 	map->cap = cap;
 }
+
+static void value_print(value_t, lur_t*);
 
 static bool map_set(
 	map_t* map, value_t key, value_t value, lur_t* ctx)
 {
 	assert(map && ctx);
+	
 	if (map->len + 1 > map->cap * MAP_MAX_LOAD) {
 		size_t cap = nextpow2(map->cap + 1);
 		map_set_cap(map, cap, ctx);
 	}
 	
-	map_entry_t* entry = map_find_entry(
-		map->entries, map->cap, key, ctx);
+	int64_t index = map_find_index(
+		map->indices,
+		map->entries,
+		map->cap,
+		map->len,
+		key,
+		ctx);
+	
+	map_entry_t* entry = &map->entries[index];
 	
 	bool is_new = entry->key.tag == TYPE_NONE;
 	if (is_new && entry->value.tag == TYPE_NONE)
@@ -1740,8 +1815,15 @@ bool map_get(
 	assert(map && ctx);
 	if (map->len == 0) return false;
 	
-	map_entry_t* entry = map_find_entry(
-		map->entries, map->cap, key, ctx);
+	int64_t index = map_find_index(
+		map->indices,
+		map->entries,
+		map->cap,
+		map->len,
+		key,
+		ctx);
+	
+	const map_entry_t* entry = &map->entries[index];
 	if (entry->key.tag == TYPE_NONE) return false;
 	
 	if (value)
@@ -1753,8 +1835,15 @@ bool map_del(map_t* map, value_t key, lur_t* ctx) {
 	assert(map && ctx);
 	if (map->len == 0) return false;
 	
-	map_entry_t* entry = map_find_entry(
-		map->entries, map->cap, key, ctx);
+	int64_t index = map_find_index(
+		map->indices,
+		map->entries,
+		map->cap,
+		map->len,
+		key,
+		ctx);
+	
+	map_entry_t* entry = &map->entries[index];
 	if (entry->key.tag == TYPE_NONE) return false;
 	
 	entry->key = make_none();
@@ -1767,7 +1856,7 @@ static void map_extend(
 	map_t* dst, const map_t* src, lur_t* ctx)
 {
 	assert(dst && src && ctx);
-	for (size_t i = 0; i < src->cap; i++) {
+	for (size_t i = 0; i < src->len; i++) {
 		const map_entry_t* entry = &src->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		map_set(dst, entry->key, entry->value, ctx);
@@ -1781,7 +1870,7 @@ static map_t* map_reverse(
 	gc_pause(ctx);
 	
 	map_t* dst = map_new(ctx);
-	for (size_t i = 0; i < src->cap; i++) {
+	for (size_t i = 0; i < src->len; i++) {
 		const map_entry_t* entry = &src->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		map_set(dst, entry->value, entry->key, ctx);
@@ -2018,7 +2107,7 @@ static text_t* value_to_text_ex(
 		const map_t* map = get_map(value);
 		result = text_lit("{", ctx);
 		size_t printed = 0;
-		for (size_t i = 0; i < map->cap; i++) {
+		for (size_t i = 0; i < map->len; i++) {
 			const map_entry_t* entry = &map->entries[i];
 			if (entry->key.tag == TYPE_NONE) continue;
 			if (value_eq(value, entry->value)) {
@@ -2178,9 +2267,10 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 			TYPE_MAP, map->len);
 		
 		size_t printed = 0;
-		for (size_t i = 0; i < map->cap; i++) {
+		for (size_t i = 0; i < map->len; i++) {
 			const map_entry_t* entry = &map->entries[i];
 			if (entry->key.tag == TYPE_NONE) continue;
+			
 			if (value_eq(value, entry->value)) {
 				printed++;
 				continue;
@@ -2673,8 +2763,8 @@ static void gc_deep_mark_obj(obj_t* obj, lur_t* ctx) {
 		}
 		case TYPE_MAP: {
 			map_t* map = (map_t*)obj;
-			for (size_t i = 0; i < map->cap; i++) {
-				map_entry_t* entry = &map->entries[i];
+			for (size_t i = 0; i < map->len; i++) {
+				const map_entry_t* entry = &map->entries[i];
 				if (entry->key.tag == TYPE_NONE) continue;
 				gc_mark_value(entry->key, ctx);
 				gc_mark_value(entry->value, ctx);
@@ -2746,8 +2836,9 @@ static void gc_mark(lur_t* ctx) {
 		gc_mark_obj((obj_t*)vref, ctx);
 	
 	gc_mark_obj((obj_t*)vm->globals, ctx);
-	for (size_t i = 0; i < vm->globals->cap; i++) {
+	for (size_t i = 0; i < vm->globals->len; i++) {
 		map_entry_t* entry = &vm->globals->entries[i];
+		if (entry->key.tag == TYPE_NONE) continue;
 		gc_mark_value(entry->key, ctx);
 		gc_mark_value(entry->value, ctx);
 	}
@@ -3094,7 +3185,7 @@ static value_t vm_launch(
 			uint16_t len = read_u16();
 			array_t* array = array_new(vm->ctx);
 			for (size_t i = 0; i < len; i++)
-				array_push(array, get(len - 1 - i), vm->ctx);
+				array_push(array, get(i), vm->ctx);
 			vm->sp -= len;
 			push(make_array(array));
 			gc_resume(vm->ctx);
@@ -4445,10 +4536,11 @@ static void cl_compile_ast(
 		ast_array_t* array = &node->data.array;
 		if (array->len > MAX_ARRAY_LIT_ITEMS)
 			error(cl->ctx, ERR_LIMIT(
-				"array literal items", MAX_ARRAY_LIT_ITEMS));
+				"array literal item", MAX_ARRAY_LIT_ITEMS));
 		
-		for (size_t i = 0; i < array->len; i++)
+		for (int64_t i = array->len - 1; i >= 0; i--)
 			cl_compile_ast(cl, array->items[i]);
+		
 		cl_write(cl, OP_NEWARRAY);
 		cl_write(cl, (array->len >> 8) & 0xff);
 		cl_write(cl, array->len & 0xff);
@@ -4458,9 +4550,9 @@ static void cl_compile_ast(
 		ast_map_t* map = &node->data.map;
 		if (map->len > MAX_MAP_LIT_ITEMS)
 			error(cl->ctx, ERR_LIMIT(
-				"map literal items", MAX_MAP_LIT_ITEMS));
+				"map literal item", MAX_MAP_LIT_ITEMS));
 		
-		for (size_t i = 0; i < map->len; i++) {
+		for (int64_t i = map->len - 1; i >= 0; i--) {
 			cl_compile_ast(cl, map->keys[i]);
 			cl_compile_ast(cl, map->values[i]);
 		}
@@ -4887,11 +4979,12 @@ static value_t std_help(value_t* args, lur_t* ctx) {
 	
 	if (text_eq(name, text_lit("all", ctx))) {
 		text_t* text = text_new(NULL, 0, ctx);
-		for (size_t i = 0; i < ctx->help->cap; i++) {
+		for (size_t i = 0; i < ctx->help->len; i++) {
 			const map_entry_t* entry = &ctx->help->entries[i];
 			if (entry->key.tag == TYPE_NONE) continue;
+			
 			text = text_concat(text,
-				text_fmt(ctx, "%s: %s\n\n",
+				text_fmt(ctx, "%s %s\n\n",
 					get_text(entry->key)->buffer,
 					(entry->value.tag == TYPE_TEXT) ?
 						get_text(entry->value)->buffer :
@@ -4907,7 +5000,7 @@ static value_t std_help(value_t* args, lur_t* ctx) {
 			"no associated docstring found for variable '%s'",
 			get_text(args[0])->buffer));
 	
-	return make_text(text_fmt(ctx, "%s: %s\n",
+	return make_text(text_fmt(ctx, "%s %s\n",
 			get_text(args[0])->buffer,
 			(help_text.tag == TYPE_TEXT) ?
 				get_text(help_text)->buffer :
@@ -4934,8 +5027,8 @@ static value_t std_load(value_t* args, lur_t* ctx) {
 
 #define STD_EVAL_DOC \
 	"code\n" \
-	"evaluates some code from text, returns the codes " \
-	"return value."
+	"evaluates some code from text, returns its return " \
+	"value."
 
 static value_t std_eval(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -5078,7 +5171,7 @@ static value_t std_while(value_t* args, lur_t* ctx) {
 
 #define STD_RANGE_DOC \
 	"start, end\ncreates an array containing values from " \
-	"start until end (exclusive)"
+	"start up until end."
 
 static value_t std_range(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5097,7 +5190,7 @@ static value_t std_range(value_t* args, lur_t* ctx) {
 
 #define STD_RANGE_INC_DOC \
 	"start, end\ncreates an array containing values from " \
-	"start until and including end (inclusive)"
+	"start up to and including end."
 
 static value_t std_range_inc(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -6036,39 +6129,26 @@ static value_t std_text_ascii(value_t* args, lur_t* ctx) {
 }
 
 #define STD_TEXT_WORDS_DOC \
-	"text delim\nsplits the text into words based on an " \	
+	"text delim\nsplits the text into words based on a " \	
 	"delimiter."
 
 static value_t std_text_words(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
-	const text_t* input = get_text(args[0]);
-	// TODO: make sep an array
-	const text_t* sep = get_text(args[1]);
 	
-	array_t* parts = array_new(ctx);
-	text_t* buffer = text_new(NULL, 0, ctx);
+	const text_t* text = get_text(args[0]);
+	const text_t* delim = get_text(args[1]);
+	array_t* tokens = array_new(ctx);
 	
-	for (size_t i = 0; i < input->len; i++) {
-		if (strncmp(
-			(const char*)input->buffer + i,
-			(const char*)sep->buffer,
-			sep->len) == 0 ||
-			i == input->len - 1)
-		{
-			if (i == input->len - 1)
-				text_push(buffer, input->buffer[i], ctx);
-			
-			array_push(parts,
-				make_text(text_copy(buffer, ctx)), ctx);
-			buffer = text_new(NULL, 0, ctx);
-			continue;
-		}
-		
-		text_push(buffer, input->buffer[i], ctx);
-	}
+	char* token = strtok(text->buffer, delim->buffer);
+	if (!token) return make_array(tokens);
 	
-	return make_array(parts);
+	do {
+		array_push(tokens,
+			make_text(text_lit(token, ctx)), ctx);
+	} while (token = strtok(NULL, delim->buffer));
+	
+	return make_array(tokens);
 }
 
 #define STD_TEXT_SLICE_DOC \
@@ -6918,7 +6998,7 @@ static value_t std_map_len(value_t* args, lur_t* ctx) {
 }
 
 #define STD_MAP_GET_DOC \
-	"map, key\nreturns the valie associated with a key."
+	"map, key\nreturns the value associated with a key."
 
 static value_t std_map_get(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_MAP);
@@ -6957,7 +7037,7 @@ static value_t std_map_has_key(value_t* args, lur_t* ctx)
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
 	
-	for (size_t i = 0; i < map->cap; i++) {
+	for (size_t i = 0; i < map->len; i++) {
 		const map_entry_t* entry = &map->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		if (value_eq(entry->key, args[1]))
@@ -6977,7 +7057,7 @@ static value_t std_map_has_value(
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
 	
-	for (size_t i = 0; i < map->cap; i++) {
+	for (size_t i = 0; i < map->len; i++) {
 		const map_entry_t* entry = &map->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		if (value_eq(entry->value, args[1]))
@@ -6996,7 +7076,7 @@ static value_t std_map_keys(value_t* args, lur_t* ctx) {
 	const map_t* map = get_map(args[0]);
 	array_t* keys = array_new(ctx);
 	
-	for (size_t i = 0; i < map->cap; i++) {
+	for (size_t i = 0; i < map->len; i++) {
 		const map_entry_t* entry = &map->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		array_push(keys, entry->key, ctx);
@@ -7014,7 +7094,7 @@ static value_t std_map_values(value_t* args, lur_t* ctx) {
 	const map_t* map = get_map(args[0]);
 	array_t* values = array_new(ctx);
 	
-	for (size_t i = 0; i < map->cap; i++) {
+	for (size_t i = 0; i < map->len; i++) {
 		const map_entry_t* entry = &map->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		array_push(values, entry->value, ctx);
@@ -7033,7 +7113,7 @@ static value_t std_map_kv_pairs(
 	const map_t* map = get_map(args[0]);
 	array_t* pairs = array_new(ctx);
 	
-	for (size_t i = 0; i < map->cap; i++) {
+	for (size_t i = 0; i < map->len; i++) {
 		const map_entry_t* entry = &map->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		if (entry->value.tag == TYPE_MAP &&
@@ -7085,7 +7165,7 @@ static value_t std_map_iter(value_t* args, lur_t* ctx) {
 	const map_t* map = get_map(args[0]);
 	const fref_t* fref = get_fref(args[1]);
 	
-	for (size_t i = 0; i < map->cap; i++) {
+	for (size_t i = 0; i < map->len; i++) {
 		const map_entry_t* entry = &map->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		value_t args[] = { entry->key, entry->value };
@@ -7106,7 +7186,7 @@ static value_t std_map_iteri(value_t* args, lur_t* ctx) {
 	const fref_t* fref = get_fref(args[1]);
 	
 	size_t index = 0;
-	for (size_t i = 0; i < map->cap; i++) {
+	for (size_t i = 0; i < map->len; i++) {
 		const map_entry_t* entry = &map->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		value_t args[] = {
@@ -7542,54 +7622,6 @@ static value_t std_socket_close(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-#define STD_DEBUG_STATS_DOC \
-	"returns a map containing stats about the system."
-
-static value_t std_debug_stats(value_t* args, lur_t* ctx) {
-	map_t* stats = map_new(ctx);
-	map_set(stats, make_text(text_lit("total ram", ctx)),
-		make_number(
-			mem_total_ram() / 1024.0 / 1024.0), ctx);
-	map_set(stats, make_text(text_lit("free ram", ctx)),
-		make_number(
-			mem_free_ram() / 1024.0 / 1024.0), ctx);
-	map_set(stats, make_text(text_lit("average load", ctx)),
-		make_number(
-			system_average_load()), ctx);
-	map_set(stats, make_text(text_lit("current heap", ctx)),
-		make_number(
-			ctx->mem.bytes / 1024.0 / 1024.0), ctx);
-	map_set(stats, make_text(text_lit("total heap", ctx)),
-		make_number(ctx->mem.total / 1024.0 / 1024.0), ctx);
-		
-	#if LUR_DEBUG_DISABLE_GC
-	map_set(stats, make_text(text_lit("next GC", ctx)),
-		make_text(text_lit("DISABLED", ctx)), ctx);
-	#else
-	map_set(stats, make_text(text_lit("next GC", ctx)),
-		make_number(
-			(ctx->mem.next_gc - ctx->mem.bytes) /
-				1024.0 / 1024.0), ctx);
-	#endif
-	
-	map_set(stats, make_text(text_lit("allocs", ctx)),
-		make_number(ctx->mem.nallocs), ctx);
-	
-	size_t threads = 1;
-	for (size_t i = 0; i < MAX_THREADS; i++) {
-		if (!ctx->vm.threads[i].is_free)
-			threads++;
-	}
-	
-	map_set(stats, make_text(text_lit("threads", ctx)),
-		make_number(threads), ctx);
-		
-	map_set(stats, make_text(text_lit("call frames", ctx)),
-		make_number(ctx->vm.ncalls), ctx);
-	
-	return make_map(stats);
-}
-
 #undef typecheck
 
 static const map_t* lur_new_enum(
@@ -7610,14 +7642,6 @@ static void stdvar_add(
 	value_t value,
 	const char* help_text)
 {
-	#if LUR_DEBUG_PRINT_STDLIB
-	if (ctx->std_map_name)
-		lur_dprintf("stdlib: %s.%s\n",
-			ctx->std_map_name, name);
-	else
-		lur_printf("stdlib: %s\n", name);
-	#endif
-	
 	if (!ctx->std_map) {
 		map_set(ctx->vm.globals,
 			make_text(text_lit(name, ctx)),
@@ -7682,24 +7706,16 @@ static void std_set_module(
 void stdlib_load(lur_t* ctx) {
 	gc_pause(ctx);
 	
-	stdvar_add(ctx, "GLOBALS",
+	stdvar_add(ctx, "NAMES",
 		make_map(ctx->vm.globals),
-		"map containing all global variables");
-	stdvar_add(ctx, "EXIT_SUCCESS", make_number(
-		EXIT_SUCCESS),
-		"return value indicating the successful exit of a "
-		"process");
-	stdvar_add(ctx, "EXIT_FAILURE", make_number(
-		EXIT_FAILURE),
-		"return value indicating the unsuccessful exit of a "
-		"process");
+		"map containing all global names.");
 	stdfun_add(ctx, "help", 1, std_help, STD_HELP_DOC);
 	stdfun_add(ctx, "load", 1, std_load, STD_LOAD_DOC);
 	stdfun_add(ctx, "eval", 1, std_eval, STD_EVAL_DOC);
 	stdfun_add(ctx, "error", 1, std_error, STD_ERROR_DOC);
 	stdvar_add(ctx, "type",
 		make_map(lur_new_enum(ctx, TYPE_NAMES, 7)),
-		"type names");
+		"type names.");
 	stdfun_add(ctx, "type_of", 1, std_type_of,
 		STD_TYPE_OF_DOC);
 	stdfun_add(ctx, "default", 1, std_default,
@@ -7732,7 +7748,7 @@ void stdlib_load(lur_t* ctx) {
 		STD_MEM_ADDR_DOC);
 	stdfun_add(ctx, "copy", 1, std_mem_copy,
 		STD_MEM_COPY_DOC);
-	stdfun_add(ctx, "deep_copy", 1, std_mem_copy,
+	stdfun_add(ctx, "deep_copy", 1, std_mem_deep_copy,
 		STD_MEM_DEEP_COPY_DOC);
 	stdfun_add(ctx, "total_ram", 0, std_mem_total_ram,
 		STD_MEM_TOTAL_RAM_DOC);
@@ -8134,8 +8150,6 @@ void stdlib_load(lur_t* ctx) {
 	std_set_module(ctx, NULL);
 	
 	std_set_module(ctx, "debug");
-	stdfun_add(ctx, "stats", 0, std_debug_stats,
-		STD_DEBUG_STATS_DOC);
 	std_set_module(ctx, NULL);
 	
 	gc_resume(ctx);
@@ -8230,7 +8244,7 @@ static void exec(
 bool lur_xstring(lur_t* ctx, const char* src) {
 	if (!ctx) return false;
 	if (setjmp(ctx->errjmp)) return false;
-	exec(ctx, text_lit(src, ctx), text_lit("[src]", ctx));
+	exec(ctx, text_lit(src, ctx), text_lit("input", ctx));
 	return true;
 }
 
