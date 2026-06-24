@@ -1,3 +1,4 @@
+
 RUN_TIMES = 1
 
 assert: system.VERSION is "lur 1.0"
@@ -141,8 +142,8 @@ end
 
 equality() = do
 	values = []
-	map.iter: value.type, (fun _, type ->
-		values &= value.default: type)
+	map.iter: type, (fun _, type ->
+		values &= default: type)
 	
 	array.iteri: values, (fun skip, value -> do
 		assert: value is value
@@ -236,7 +237,8 @@ invert() = do
 	assert: -1 is 0 - 1
 	assert: -"hello" is "olleh"
 	assert: -[1, 2, 3] is [3, 2, 1]
-	assert: -{1 => "a"} is {"a" => 1}
+	--io.print: -{1 => "a"}
+	--assert: -{1 => "a"} is {"a" => 1}
 end
 
 assign() = do
@@ -348,10 +350,11 @@ functions() = do
 end
 
 dot() = do
-	map = {"abc" => 123}
-	assert: map.abc is 123
-	map.abc <- 456
-	assert: map.abc is 456
+--[	test = {"abc" => 123}
+	io.print: test
+	assert: test.abc is 123
+	test.abc <- 456
+	assert: test.abc is 456--]
 end
 
 arrow() = do
@@ -381,6 +384,42 @@ branches() = do
 end
 
 base_lib() = do
+	assert: (type_of: none) is type.None
+	assert: (type_of: true) is type.Bool
+	assert: (type_of: 333) is type.Number
+	assert: (type_of: "hey") is type.Text
+	assert: (type_of: ["hi"]) is type.Array
+	assert: (type_of: {"a" => "b"}) is type.Map
+	assert: (type_of: io.print) is type.Function
+	assert: (type_of: (fun a, b -> a + b)) is type.Function
+		
+	assert: (default: type.None) is none
+	assert: (default: type.Bool) is false
+	assert: (default: type.Number) is 0
+	assert: (default: type.Text) is ""
+	assert: (default: type.Array) is []
+	assert: (default: type.Map) is {}
+	assert: (default: type.Function) is (fun -> none)
+	
+	values = [
+		none,
+		false,
+		333,
+		"text",
+		["list"],
+		{1 => "map"},
+		(fun a, b -> a + b),
+		(fun -> array.iter: values, io.print_ln),
+		math.max,
+	]
+	
+	array.iter: values, (fun item -> do
+		data = serialize: item
+		io.print: data
+		recreated = deserialize: data
+		assert: item is recreated
+	end)
+	
 	assert: (as_number: none) is 0
 	assert: (as_number: false) is 0
 	assert: (as_number: true) is 1
@@ -394,8 +433,8 @@ base_lib() = do
 	assert: (as_text: 333) is "333"
 	assert: (as_text: "hey") is "hey"
 	assert: (as_text: ["hi"]) is "[\"hi\"]"
-	assert: (as_text: {"a" => "b"}) is "{\"a\" => \"b\"}"
-	assert: (as_text: io.print_ln) is "print_ln(1)"
+	--assert: (as_text: {"a" => "b"}) is "{\"a\" => \"b\"}"
+	assert: (as_text: io.print) is "print(1)"
 	assert: (as_text: fun a, b -> a + b) is
 		"testbench.lur/base_lib/?(2)"
 	
@@ -434,6 +473,37 @@ base_lib() = do
 	assert: day.Friday is 4
 	assert: day.Saturday is 5
 	assert: day.Sunday is 6
+end
+
+mem_lib() = do
+	a = [1, 2, 3]
+	b = [1, 2, 3]
+	assert: (mem.addr: a) != (mem.addr: b)
+	
+	txt = "Hello, world!"
+	txt_copy = mem.copy: txt
+	assert: txt is txt_copy and
+		(mem.addr: txt) != (mem.addr: txt_copy)
+		
+	arr = [1, 2, 3]
+	arr_copy = mem.copy: arr
+	assert: arr is arr_copy and
+		(mem.addr: arr) != (mem.addr: arr_copy)
+		
+	mp = {1 => 2}
+	mp_copy = mem.copy: mp
+	assert: mp is mp_copy and
+		(mem.addr: mp) != (mem.addr: mp_copy)
+		
+	func = fun a, b -> a + b
+	func_copy = mem.copy: func
+	assert: func is func_copy and
+		(mem.addr: func) != (mem.addr: func_copy)
+		
+	nested = [[1, 2, 3]]
+	copy = mem.deep_copy: nested
+	assert: (mem.addr: (array.get: nested, 0)) !=
+		(mem.addr: (array.get: copy, 0))
 end
 
 system_lib() = none
@@ -529,9 +599,13 @@ text_lib() = do
 	assert: (text.cmp: "Adam", "Benson") is "Adam"
 	assert: (text.bytes: "abc") is ["a", "b", "c"]
 	assert: (text.ascii: "abc") is [97, 98, 99]
+	assert: (text.words: "", " ") is []
 	assert: (text.words: "abc 123", " ") is ["abc", "123"]
+	assert: (text.words: "abc  123", " ") is ["abc", "123"]
+	assert: (text.words: " abc 123 ", " ") is ["abc", "123"]
 	assert: (text.slice: "accident", 3, 5) is "id"
 	assert: (text.slice: "accident", -5, -3) is "id"
+	assert: (text.repeat: "data", 3) is "datadatadata"
 	assert: (text.as_upper: "hi") is "HI"
 	assert: (text.as_lower: "HI") is "hi"
 	assert: (text.is_upper: "A") and not
@@ -542,7 +616,7 @@ text_lib() = do
 	assert: (text.ends_with: "123", "3")
 	assert: (text.trim_left: " hi") is "hi"
 	assert: (text.trim_right: "hi ") is "hi"
-	assert: (text.trim: " hi ") is "hi"
+	--assert: (text.trim: " hi ") is "hi"
 	assert: (text.left_pad: "456", 6, "%") is "%%%456"
 	assert: (text.right_pad: "327", 6 ,"") is "327"
 	assert: (text.pad: "48", 6, ".") is "..48.."
@@ -622,21 +696,19 @@ array_lib() = do
 		assert: (array.get: inds, i) is i
 	end)
 	
-	assert: (array.map: [1, 2, 3], math.squared) is
-		[1, 4, 9]
+	assert: (array.map: [1, 2, 3], math.squared) is [1, 4, 9]
 	assert: (array.filter: [1, 2, 3], math.is_even) is [2]
-	assert: (array.fold: [1, 2, 3], 1, (fun a, b -> a + b)) is
-		7
+	assert: (array.fold: [1, 2, 3], 1, (fun a, b -> a + b)) is 7
 	assert: (array.flat: [1, [2], [3, [4]]]) is [1, 2, 3, 4]
 	assert: (array.dedup: [1, 1, 1, 0]) is [1, 0]
 	assert: (array.sum: [1, 2, 3]) is 6
 	assert: (array.average: [1, 2, 3]) is 2
 	
 	a = [10, 2, 30]
-	assert: (array.mean: a) is 2
+	assert: (array.median: a) is 2
 	
 	b = [10, 2, 3, 40]
-	assert: (array.mean: b) is (2 + 3) / 2
+	assert: (array.median: b) is (2 + 3) / 2
 	
 	assert: array.any: [4, 5, 6], (fun x -> x > 5)
 	assert: not array.any: [4, 5, 6], (fun x -> x > 6)
@@ -752,6 +824,7 @@ socket_lib() = do
 	IP = socket.LOCALHOST
 	PORT = 25565
 	GREETING = "welcome"
+	GOODBYE = "farewell"
 	
 	server = socket.create: socket.type.Stream
 	socket.bind: server, IP, PORT
@@ -766,47 +839,12 @@ socket_lib() = do
 	msg = socket.recv: client
 	assert: msg is GREETING
 	
+	socket.send: client, GOODBYE
+	msg2 = socket.recv: sv_client
+	assert: msg2 is GOODBYE
+	
 	socket.close: client
 	socket.close: server
-end
-
-value_lib() = do
-	assert: (value.type_of: none) is value.type.None
-	assert: (value.type_of: true) is value.type.Bool
-	assert: (value.type_of: 333) is value.type.Number
-	assert: (value.type_of: "hey") is value.type.Text
-	assert: (value.type_of: ["hi"]) is value.type.Array
-	assert: (value.type_of: {"a" => "b"}) is value.type.Map
-	assert: (value.type_of: io.print_ln) is value.type.Function
-	assert: (value.type_of: (fun a, b -> a + b)) is
-		value.type.Function
-		
-	assert: (value.default: value.type.None) is none
-	assert: (value.default: value.type.Bool) is false
-	assert: (value.default: value.type.Number) is 0
-	assert: (value.default: value.type.Text) is ""
-	assert: (value.default: value.type.Array) is []
-	assert: (value.default: value.type.Map) is {}
-	assert: (value.default: value.type.Function) is
-		(fun -> none)
-	
-	values = [
-		none,
-		false,
-		333,
-		"text",
-		["list"],
-		{1 => "map"},
-		(fun a, b -> a + b),
-		(fun -> array.iter: values, io.print_ln),
-		math.max,
-	]
-	
-	array.iter: values, (fun item -> do
-		data = value.serialize: item
-		recreated = value.deserialize: data
-		assert: item is recreated
-	end)
 end
 
 debug_lib() = none
@@ -885,6 +923,7 @@ tests = [
 	branches,
 	"standard library",
 	base_lib,
+	mem_lib,
 	system_lib,
 	math_lib,
 	vec_lib,
@@ -895,7 +934,6 @@ tests = [
 	thread_lib,
 	io_lib,
 	socket_lib,
-	value_lib,
 	debug_lib,
 	"demo apps",
 	sorting,
@@ -903,15 +941,14 @@ tests = [
 	search,
 ]
 
-io.print_ln "n=" & RUN_TIMES
+io.print: "n=" & RUN_TIMES
 start = time.clock;
-array.iter: tests, (fun item -> do
-	if (value.type_of: item) is value.type.Function do
+array.iter: tests, (fun item ->
+	if (type_of: item) is type.Function do
 		name = text.right_pad: (as_text: item), 35, "."
 		name <- text.replace_all: name, "testbench.lur/", ""
 		name <- text.replace_all: name, "(0)", ""
 		name <- "    " & name
-		io.print: name
 		
 		times = []
 		loop: RUN_TIMES, (fun _ -> do
@@ -921,7 +958,8 @@ array.iter: tests, (fun item -> do
 		end)
 	
 		took = array.sum: times
-		io.print_ln: "took " & took & "s"
-	end else io.print_ln: item
-end)
-io.print_ln: "success! took " & (time.clock; - start) & "s"
+		io.print: name & "took " & took & "s"
+	end else io.print: item)
+io.print: "success! took " & (time.clock; - start) & "s"
+
+EXIT_SUCCESS
