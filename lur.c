@@ -123,8 +123,8 @@
 	"undefined variable: '%.*s'", \
 		value_to_text(name, ctx)->len, \
 		value_to_text(name, ctx)->buffer
-#define ERR_INDEX(key) \
-	"value at index '%.*s' not found", \
+#define ERR_KEY(key) \
+	"value with key '%.*s' not found", \
 		value_to_text(key, ctx)->len, \
 		value_to_text(key, ctx)->buffer
 #define ERR_NOT_CALLABLE(value, ctx) \
@@ -145,17 +145,6 @@
 	"remainder of division by zero"
 #define ERR_ASSERTION \
 	"assertion failed"
-	
-#if LUR_INCLUDE_SDL
-#define ERR_SDL(msg) \
-	"%s: %s", (msg), SDL_GetError()
-#define ERR_SDL_IMAGE(msg) \
-	"%s: %s", (msg), IMG_GetError()
-#define ERR_SDL_TTF(msg) \
-	"%s: %s", (msg), TTF_GetError()
-#define ERR_SDL_MIXER(msg) \
-	"%s: %s", (msg), Mix_GetError()
-#endif
 
 #if LUR_DEBUG_ASSERTS
 #define unreachable() \
@@ -430,7 +419,7 @@ typedef struct {
 	value_t* sp;
 	
 	vref_t* open_vrefs;
-	map_t* globals;
+	map_t* names;
 	thread_t threads[MAX_THREADS];
 	lur_t* ctx;
 } vm_t;
@@ -874,7 +863,7 @@ static unsigned nextpow2(unsigned n) {
 
 static void text_print(const text_t*);
 static void text_eprint(const text_t*);
-static void print_error_line(const text_t*, int);
+static void conc_error_line(lur_t*, const text_t*, int);
 static void print_stack_trace(const lur_t*);
 static text_t* text_fmt(lur_t*, const char*, ...);
 
@@ -900,8 +889,8 @@ static void error(lur_t* ctx, const char* msg, ...) {
 		"[%.*s:%d] error: %s\n",
 			func->name->len, func->name->buffer,
 			line, buffer);
+	conc_error_line(ctx, func->src, line);
 	lur_eprintf("%s", ctx->error_msg->buffer);
-	print_error_line(func->src, line);
 	
 	if (ctx->running) {
 		print_stack_trace(ctx);
@@ -917,7 +906,12 @@ const char* lur_get_error(lur_t* ctx) {
 	return (const char*)ctx->error_msg->buffer;
 }
 
-static void print_error_line(const text_t* text, int line) {
+static text_t* text_concat(
+	const text_t*, const text_t*, lur_t*);
+
+static void conc_error_line(
+	lur_t* ctx, const text_t* text, int line)
+{
 	int count = 1;
 	size_t len = 0;
 	
@@ -932,7 +926,11 @@ static void print_error_line(const text_t* text, int line) {
 				if (ch == '\n' || j == text->len - 1) break;
 			}
 			
-			lur_eprintf("%.*s\n", len, text->buffer + i);
+			ctx->error_msg = text_concat(
+				ctx->error_msg,
+				text_fmt(ctx, " %5d | %.*s\n", line,
+					(int)len, text->buffer + i),
+				ctx);
 			break;
 		}
 	}
@@ -1373,7 +1371,7 @@ static size_t array_convert_index(
 	if (index < 0)
 		index = array->len + index;
 	if (index >= array->len)
-		error(ctx, ERR_INDEX(make_number(index)));
+		error(ctx, ERR_KEY(make_number(index)));
 	return index;
 }
 
@@ -1401,7 +1399,7 @@ static void array_push(
 static value_t array_pop(array_t* array, lur_t* ctx) {
 	assert(array && ctx);
 	if (array->len == 0)
-		error(ctx, ERR_INDEX(make_number(0)));
+		error(ctx, ERR_KEY(make_number(0)));
 	
 	value_t value = array->items[array->len - 1];
 	arr_alloc(ctx, array->items, value_t,
@@ -1638,15 +1636,14 @@ static bool map_eq(const map_t* a, const map_t* b) {
 	assert(a && b);
 	if (a == b) return true;
 	if (a->len != b->len) return false;
-	if (a->cap != b->cap) return false;
-	for (size_t i = 0; i < a->cap; i++) {
-		if (a->indices[i] == -1) continue;
-		if (b->indices[i] == -1) continue;
-		
+	for (size_t i = 0; i < a->len; i++) {
 		const map_entry_t* a_entry = &a->entries[
 			a->indices[i]];
 		const map_entry_t* b_entry = &b->entries[
 			b->indices[i]];
+			
+		if (a_entry->key.tag == TYPE_NONE) continue;
+		if (b_entry->key.tag == TYPE_NONE) continue;
 		
 		if (!value_eq(a_entry->key, b_entry->key))
 			return false;
@@ -1657,52 +1654,7 @@ static bool map_eq(const map_t* a, const map_t* b) {
 	return true;
 }
 
-static void map_debug(const map_t* map) {
-	printf("cap %d, len %d\n", map->cap, map->len);
-	puts("indices:");
-	for (int64_t i = 0; i < map->cap; i++) {
-		printf("%d ", i);
-	}
-	printf("\n");
-	
-	for (int64_t i = 0; i < map->cap; i++) {
-		printf("%d ", map->indices[i]);
-	}
-	printf("\n");
-}
-
 static uint32_t value_hash(value_t, lur_t*);
-
-/*static map_entry_t* map_find_entry(
-	int64_t* indices,
-	map_entry_t* entries,
-	size_t cap,
-	value_t key,
-	lur_t* ctx)
-{
-	assert(entries);
-	uint32_t hash = value_hash(key, ctx);
-	uint32_t index = hash & (cap - 1);
-	map_entry_t* tombstone = NULL;
-	
-	for (;;) {
-		int64_t ind = indices[index];
-		map_entry_t* entry = &entries[ind];
-		printf("%d %d\n", index, ind);
-		
-		//if (entry->key.tag == TYPE_NONE) {
-		if (ind == -1) {
-			if (entry->value.tag == TYPE_NONE)
-				return (tombstone) ? tombstone : entry;
-			else if (!tombstone)
-				tombstone = entry;
-		} else if (value_eq(entry->key, key)) {
-			return entry;
-		}
-		
-		index = (index + 1) & (cap - 1);
-	}
-}*/
 
 static int64_t map_find_index(
 	int64_t* indices,
@@ -1742,6 +1694,8 @@ static void map_set_cap(
 	map_t* map, size_t cap, lur_t* ctx)
 {
 	assert(map && ctx);
+	gc_pause(ctx);
+	
 	int64_t* indices = mem_alloc(
 		ctx, sizeof(int64_t) * cap);
 	map_entry_t* entries = mem_alloc(
@@ -1753,8 +1707,9 @@ static void map_set_cap(
 		entries[i].value = make_none();
 	}
 	
+	size_t len = map->len;
 	map->len = 0;
-	for (size_t i = 0; i < map->cap; i++) {
+	for (size_t i = 0; i < len; i++) {
 		const map_entry_t* src = &map->entries[i];
 		if (src->key.tag == TYPE_NONE) continue;
 		
@@ -1773,6 +1728,7 @@ static void map_set_cap(
 	map->indices = indices;
 	map->entries = entries;
 	map->cap = cap;
+	gc_resume(ctx);
 }
 
 static void value_print(value_t, lur_t*);
@@ -2070,7 +2026,7 @@ static text_t* value_to_text_ex(
 	}
 	case TYPE_NUMBER: {
 		double number = get_number(value);
-		if (trunc(number) == number)
+		if (trunc(number) == number && number != INFINITY)
 			result = text_fmt(ctx, "%d", (long)number);
 		else
 			result = text_fmt(ctx, "%f", number);
@@ -2226,7 +2182,7 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 	case TYPE_NUMBER: {
 		result = text_fmt(ctx, "%d ", TYPE_NUMBER);
 		double number = get_number(value);
-		if (trunc(number) == number)
+		if (trunc(number) == number && number != INFINITY)
 			result = text_concat(result, text_fmt(ctx,
 				"%d ", (long)number), ctx);
 		else
@@ -2835,9 +2791,9 @@ static void gc_mark(lur_t* ctx) {
 		vref = vref->next)
 		gc_mark_obj((obj_t*)vref, ctx);
 	
-	gc_mark_obj((obj_t*)vm->globals, ctx);
-	for (size_t i = 0; i < vm->globals->len; i++) {
-		map_entry_t* entry = &vm->globals->entries[i];
+	gc_mark_obj((obj_t*)vm->names, ctx);
+	for (size_t i = 0; i < vm->names->len; i++) {
+		map_entry_t* entry = &vm->names->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		gc_mark_value(entry->key, ctx);
 		gc_mark_value(entry->value, ctx);
@@ -2910,7 +2866,7 @@ static void vm_init(vm_t* vm, lur_t* ctx) {
 	vm->sp = vm->stack;
 	
 	vm->open_vrefs = NULL;
-	vm->globals = map_new(ctx);
+	vm->names = map_new(ctx);
 	
 	for (size_t i = 0; i < MAX_THREADS; i++)
 		vm->threads[i].is_free = true;
@@ -3048,7 +3004,7 @@ static void dbg_print_opcode(const vm_t* vm) {
 		value_dprint_ex(key, true, 64, vm->ctx);
 		lur_dprintf(": ");
 		value_t value;
-		map_get(vm->globals, key, &value, vm->ctx);
+		map_get(vm->names, key, &value, vm->ctx);
 		value_dprint_ex(value, true, 64, vm->ctx);
 		break;
 	}
@@ -3064,7 +3020,7 @@ static void dbg_print_opcode(const vm_t* vm) {
 		value_dprint_ex(value, false, 64, vm->ctx);
 		lur_dprintf(": ");
 		value_t key = vm->fp->func->data[u16arg];
-		map_get(vm->globals, key, &value, vm->ctx);
+		map_get(vm->names, key, &value, vm->ctx);
 		value_dprint_ex(value, true, 64, vm->ctx);
 		break;
 	}
@@ -3376,21 +3332,21 @@ static value_t vm_launch(
 		case OP_GETGLOB: {
 			value_t key = vm->fp->func->data[read_u16()];
 			value_t value;
-			if (!map_get(vm->globals, key, &value, vm->ctx))
+			if (!map_get(vm->names, key, &value, vm->ctx))
 				error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
 			push(value);
 			break;
 		}
 		case OP_SETGLOB: {
 			value_t key = vm->fp->func->data[read_u16()];
-			if (!map_get(vm->globals, key, NULL, vm->ctx))
+			if (!map_get(vm->names, key, NULL, vm->ctx))
 				error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
-			map_set(vm->globals, key, get(0), vm->ctx);
+			map_set(vm->names, key, get(0), vm->ctx);
 			break;
 		}
 		case OP_ADDGLOB: {
 			value_t key = vm->fp->func->data[read_u16()];
-			map_set(vm->globals, key, get(0), vm->ctx);
+			map_set(vm->names, key, get(0), vm->ctx);
 			pop();
 			break;
 		}
@@ -6146,7 +6102,7 @@ static value_t std_text_words(value_t* args, lur_t* ctx) {
 	do {
 		array_push(tokens,
 			make_text(text_lit(token, ctx)), ctx);
-	} while (token = strtok(NULL, delim->buffer));
+	} while ((token = strtok(NULL, delim->buffer)));
 	
 	return make_array(tokens);
 }
@@ -6165,13 +6121,13 @@ static value_t std_text_slice(value_t* args, lur_t* ctx) {
 	if (start < 0)
 		start = text->len + start;
 	if (start >= text->len)
-		error(ctx, ERR_INDEX(args[1]));
+		error(ctx, ERR_KEY(args[1]));
 		
 	double end = get_number(args[2]);
 	if (end < 0)
 		end = text->len + end;
 	if (end >= text->len)
-		error(ctx, ERR_INDEX(args[1]));
+		error(ctx, ERR_KEY(args[1]));
 	
 	return make_text(text_slice(text, start, end, ctx));
 }
@@ -6493,7 +6449,7 @@ static value_t std_array_insert(value_t* args, lur_t* ctx) {
 	if (index < 0)
 		index = array->len + 1 + index;
 	if (index > array->len)
-		error(ctx, ERR_INDEX(args[1]));
+		error(ctx, ERR_KEY(args[1]));
 	array_insert(array, (size_t)index, args[2], ctx);
 	return make_none();
 }
@@ -6528,7 +6484,7 @@ static value_t std_array_head(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
-		error(ctx, ERR_INDEX(make_number(0)));
+		error(ctx, ERR_KEY(make_number(0)));
 	return array->items[0];
 }
 
@@ -6539,7 +6495,7 @@ static value_t std_array_tail(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
-		error(ctx, ERR_INDEX(make_number(0)));
+		error(ctx, ERR_KEY(make_number(0)));
 	array_t* tail = array_copy(array, false, ctx);
 	array_del(tail, 0, ctx);
 	return make_array(tail);
@@ -6552,7 +6508,7 @@ static value_t std_array_last(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
-		error(ctx, ERR_INDEX(make_number(0)));
+		error(ctx, ERR_KEY(make_number(0)));
 	return array->items[array->len - 1];
 }
 
@@ -6885,7 +6841,7 @@ static value_t std_array_all(value_t* args, lur_t* ctx) {
 static value_t std_array_sort(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	value_t value;
-	bool get = map_get(ctx->vm.globals,
+	bool get = map_get(ctx->vm.names,
 		make_text(text_lit("default_sort", ctx)), &value, ctx);
 	if (!get || value.tag != TYPE_FREF)
 		error(ctx,  ERR_NOT_IMPLEMENTED(
@@ -7005,7 +6961,7 @@ static value_t std_map_get(value_t* args, lur_t* ctx) {
 	const map_t* map = get_map(args[0]);
 	value_t value;
 	if (!map_get(map, args[1], &value, ctx))
-		error(ctx, ERR_INDEX(args[1]));
+		error(ctx, ERR_KEY(args[1]));
 	return value;
 }
 
@@ -7643,7 +7599,7 @@ static void stdvar_add(
 	const char* help_text)
 {
 	if (!ctx->std_map) {
-		map_set(ctx->vm.globals,
+		map_set(ctx->vm.names,
 			make_text(text_lit(name, ctx)),
 			value,
 			ctx);
@@ -7697,7 +7653,7 @@ static void std_set_module(
 	ctx->std_map = map_new(ctx);
 	ctx->std_map_name = name;
 	
-	map_set(ctx->vm.globals,
+	map_set(ctx->vm.names,
 		make_text(text_lit(name, ctx)),
 		make_map(ctx->std_map),
 		ctx);
@@ -7707,7 +7663,7 @@ void stdlib_load(lur_t* ctx) {
 	gc_pause(ctx);
 	
 	stdvar_add(ctx, "NAMES",
-		make_map(ctx->vm.globals),
+		make_map(ctx->vm.names),
 		"map containing all global names.");
 	stdfun_add(ctx, "help", 1, std_help, STD_HELP_DOC);
 	stdfun_add(ctx, "load", 1, std_load, STD_LOAD_DOC);
