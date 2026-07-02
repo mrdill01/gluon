@@ -929,7 +929,7 @@ static void conc_error_line(
 			ctx->error_msg = text_concat(
 				ctx->error_msg,
 				text_fmt(ctx, " %5d | %.*s\n", line,
-					(int)len, text->buffer + i),
+					(int)len, text->buffer + i + ((line == 1) ? 0 : 1)),
 				ctx);
 			break;
 		}
@@ -1656,7 +1656,7 @@ static bool map_eq(const map_t* a, const map_t* b) {
 
 static uint32_t value_hash(value_t, lur_t*);
 
-static int64_t map_find_index(
+static map_entry_t* map_find_entry(
 	int64_t* indices,
 	map_entry_t* entries,
 	size_t cap,
@@ -1670,12 +1670,13 @@ static int64_t map_find_index(
 	map_entry_t* tombstone = NULL;
 	
 	for (;;) {
+		//printf("%d, %d\n", index, indices[index]);
 		if (indices[index] == -1) {
 			indices[index] = len;
 			map_entry_t* entry = &entries[indices[index]];
 			entry->key = make_none();
 			entry->value = make_none();
-			return indices[index];
+			return entry;
 			/*if (entry->value.tag == TYPE_NONE)
 				return (tombstone) ? tombstone : entry;
 			else if (!tombstone)
@@ -1683,7 +1684,7 @@ static int64_t map_find_index(
 		} else {
 			const map_entry_t* entry = &entries[indices[index]];
 			if (value_eq(entry->key, key))
-				return indices[index];
+				return entry;
 		}
 		
 		index = (index + 1) & (cap - 1);
@@ -1709,15 +1710,13 @@ static void map_set_cap(
 	
 	size_t len = map->len;
 	map->len = 0;
-	for (size_t i = 0; i < len; i++) {
+	for (size_t i = 0; i < map->cap; i++) {
 		const map_entry_t* src = &map->entries[i];
 		if (src->key.tag == TYPE_NONE) continue;
 		
-		int64_t index = map_find_index(
+		map_entry_t* dst = map_find_entry(
 			indices, entries, cap, map->len, src->key, ctx);
-		map_entry_t* dst = &entries[index];
-		
-		indices[i] = map->indices[i];
+		//indices[i] = map->indices[i];
 		dst->key = src->key;
 		dst->value = src->value;
 		map->len++;
@@ -1743,15 +1742,13 @@ static bool map_set(
 		map_set_cap(map, cap, ctx);
 	}
 	
-	int64_t index = map_find_index(
+	map_entry_t* entry = map_find_entry(
 		map->indices,
 		map->entries,
 		map->cap,
 		map->len,
 		key,
 		ctx);
-	
-	map_entry_t* entry = &map->entries[index];
 	
 	bool is_new = entry->key.tag == TYPE_NONE;
 	if (is_new && entry->value.tag == TYPE_NONE)
@@ -1771,17 +1768,15 @@ bool map_get(
 	assert(map && ctx);
 	if (map->len == 0) return false;
 	
-	int64_t index = map_find_index(
+	const map_entry_t* entry = map_find_entry(
 		map->indices,
 		map->entries,
 		map->cap,
 		map->len,
 		key,
 		ctx);
-	
-	const map_entry_t* entry = &map->entries[index];
+		
 	if (entry->key.tag == TYPE_NONE) return false;
-	
 	if (value)
 		*value = entry->value;
 	return true;
@@ -1791,7 +1786,7 @@ bool map_del(map_t* map, value_t key, lur_t* ctx) {
 	assert(map && ctx);
 	if (map->len == 0) return false;
 	
-	int64_t index = map_find_index(
+	map_entry_t* entry = map_find_entry(
 		map->indices,
 		map->entries,
 		map->cap,
@@ -1799,9 +1794,7 @@ bool map_del(map_t* map, value_t key, lur_t* ctx) {
 		key,
 		ctx);
 	
-	map_entry_t* entry = &map->entries[index];
 	if (entry->key.tag == TYPE_NONE) return false;
-	
 	entry->key = make_none();
 	entry->value = make_bool(true);
 	map->len--;
@@ -2155,11 +2148,11 @@ static bool value_eq(value_t a, value_t b) {
 		return array_eq(get_array(a), get_array(b));
 	case TYPE_MAP:
 		return map_eq(get_map(a), get_map(b));
-	case TYPE_FUNC:
-		return func_eq(get_func(a), get_func(b));
 	case TYPE_FREF:
 		return func_eq(get_fref(a)->func, get_fref(b)->func);
 	case TYPE_VREF: return get_vref(a) == get_vref(b);
+	case TYPE_FUNC:
+		return func_eq(get_func(a), get_func(b));
 	default: unreachable();
 	}
 	return false;
@@ -2258,14 +2251,14 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 			break;
 		
 		result = text_concat(result,
-			text_fmt(ctx, "%d ", func->ncode), ctx);
+			text_fmt(ctx, "%ld ", func->ncode), ctx);
 		for (size_t i = 0; i < func->ncode; i++)
 			result = text_concat(result,
 				text_fmt(ctx, "%d ", func->code[i]),
 				ctx);
 		
 		result = text_concat(result,
-			text_fmt(ctx, "%d ", func->ndata), ctx);
+			text_fmt(ctx, "%ld ", func->ndata), ctx);
 		for (size_t i = 0; i < func->ndata; i++) {
 			const text_t* data = value_serialize(
 				func->data[i], ctx);
@@ -2275,14 +2268,14 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 		}
 		
 		result = text_concat(result,
-			text_fmt(ctx, "%d ", func->nlines), ctx);
+			text_fmt(ctx, "%ld ", func->nlines), ctx);
 		for (size_t i = 0; i < func->nlines; i++)
 			result = text_concat(result,
 				text_fmt(ctx, "%d ", func->lines[i]),
 				ctx);
 				
 		result = text_concat(result,
-			text_fmt(ctx, "%d ", func->nvrefs), ctx);
+			text_fmt(ctx, "%ld ", func->nvrefs), ctx);
 		for (size_t i = 0; i < func->nvrefs; i++)
 			result = text_concat(result,
 				value_serialize(make_vref(fref->vrefs[i]), ctx), ctx);
@@ -2386,20 +2379,20 @@ static value_t deserialize(
 			break;
 		}
 		
-		len = atoi(get_token());
+		len = atol(get_token());
 		for (size_t i = 0; i < len; i++)
 			func_write(func, atoi(get_token()), 1, ctx);
 		
-		len = atoi(get_token());
+		len = atol(get_token());
 		for (size_t i = 0; i < len; i++)
 			func_write_value(func,
 				deserialize(data, offset, ctx), ctx);
 		
-		func->nlines = atoi(get_token());
+		func->nlines = atol(get_token());
 		for (size_t i = 0; i < func->nlines; i++)
 			func->lines[i] = atoi(get_token());
 		
-		func->nvrefs = atoi(get_token());
+		func->nvrefs = atol(get_token());
 		fref_t* fref = fref_new(func, ctx);
 		fref->nvrefs = func->nvrefs;
 		for (size_t i = 0; i < fref->nvrefs; i++)
@@ -5336,6 +5329,15 @@ static value_t std_time_second(value_t* args, lur_t* ctx) {
 	return make_number(t->tm_sec);
 }
 
+#define STD_TIME_IS_DST_DOC \
+	"returns true if it is currently daylight savings time."
+	
+static value_t std_time_is_dst(value_t* args, lur_t* ctx) {
+	time_t now = time(NULL);
+	struct tm* t = localtime(&now);
+	return make_bool(t->tm_isdst);
+}
+
 #define STD_TIME_TIMESTAMP_DOC \
 	"returns a timestamp measured in seconds."
 
@@ -7727,6 +7729,8 @@ void stdlib_load(lur_t* ctx) {
 		STD_TIME_MINUTE_DOC);
 	stdfun_add(ctx, "second", 0, std_time_second,
 		STD_TIME_SECOND_DOC);
+	stdfun_add(ctx, "is_dst", 0, std_time_is_dst,
+		STD_TIME_IS_DST_DOC);
 	stdfun_add(ctx, "timestamp", 0, std_time_timestamp,
 		STD_TIME_TIMESTAMP_DOC);
 	stdfun_add(ctx, "clock", 0, std_time_clock,
@@ -7898,9 +7902,6 @@ void stdlib_load(lur_t* ctx) {
 	stdvar_add(ctx, "WHITESPACE", make_text(
 		text_lit(" \t\n\r", ctx)),
 		"all whitespace characters.");
-	stdvar_add(ctx, "NEWLINE", make_text(
-		text_lit("\n", ctx)),
-		"newline string for the system.");
 	stdfun_add(ctx, "len", 1, std_text_len,
 		STD_TEXT_LEN_DOC);
 	stdfun_add(ctx, "cmp", 2, std_text_cmp,
