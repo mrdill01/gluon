@@ -1114,6 +1114,19 @@ static void text_push(text_t* text, uint8_t ch, lur_t* ctx) {
 	text->buffer[text->len] = '\0';
 }
 
+static uint8_t text_pop(text_t* text, lur_t* ctx) {
+	assert(text && ctx);
+	arr_alloc(ctx, text->buffer, uint8_t,
+		text->len + 1, text->len);
+	uint8_t result = text->buffer[text->len];
+	text->len--;
+	text->buffer[text->len] = '\0';
+	
+	if (text->len == 0)
+		return '\0';
+	return result;
+}
+
 static text_t* text_fmt(lur_t* ctx, const char* msg, ...) {
 	assert(ctx && msg);
 	
@@ -2077,12 +2090,6 @@ static text_t* value_to_text_ex(
 		result = text_concat(result, text_lit("}", ctx), ctx);
 		break;
 	}
-	case TYPE_FUNC: {
-		const func_t* func = get_func(value);
-		result = text_fmt(ctx, "%.*s(%d)",
-			func->name->len, func->name->buffer, func->argc);
-		break;
-	}
 	case TYPE_FREF: {
 		const fref_t* fref = get_fref(value);
 		result = value_to_text(make_function(fref->func), ctx);
@@ -2090,6 +2097,12 @@ static text_t* value_to_text_ex(
 	}
 	case TYPE_VREF: {
 		result = text_lit("vref", ctx);
+		break;
+	}
+	case TYPE_FUNC: {
+		const func_t* func = get_func(value);
+		result = text_fmt(ctx, "%.*s",
+			func->name->len, func->name->buffer);
 		break;
 	}
 	default: unreachable();
@@ -3868,6 +3881,30 @@ static ast_node_t* ps_name(parser_t* ps) {
 		return node;
 	}
 	
+	/*if (ps_check(ps, T_NAME)) {
+		node->tag = AST_CALL;
+		node->data.call.func = ps->prefix;
+		node->data.call.argc = 0;
+		node->data.call.args = NULL;
+	
+		while (!ps_check(ps, T_EOF)) {
+			if (node->data.call.argc == MAX_ARGS)
+				error(ps->ctx, ERR_LIMIT("max call args",
+					MAX_ARGS));
+		
+			arr_alloc(ps->ctx,
+				node->data.call.args, ast_node_t*,
+				node->data.call.argc, node->data.call.argc + 1);
+			node->data.call.args[node->data.call.argc++] =
+				ps_expr(ps);
+			
+			if (!ps_match(ps, T_COMMA))
+				break;
+		}
+	
+		return node;
+	}*/
+	
 	node->tag = AST_LOAD;
 	node->data.load.name = name;
 	return node;
@@ -5204,7 +5241,7 @@ static value_t std_assert(value_t* args, lur_t* ctx) {
 	return make_none();
 }
 
-static size_t mem_total_ram(void) {
+static size_t mem_ram(void) {
 	struct sysinfo info;
 	sysinfo(&info);
 	return info.totalram;
@@ -5247,13 +5284,13 @@ static value_t std_mem_deep_copy(
 	return value_copy(args[0], true, ctx);
 }
 
-#define STD_MEM_TOTAL_RAM_DOC \
+#define STD_MEM_RAM_DOC \
 	"returns the total number of bytes of ram available."
 
-static value_t std_mem_total_ram(
+static value_t std_mem_ram(
 	value_t* args, lur_t* ctx)
 {
-	return make_number(mem_total_ram());
+	return make_number(mem_ram());
 }
 
 #define STD_MEM_FREE_RAM_DOC \
@@ -5356,7 +5393,7 @@ static value_t std_time_clock(value_t* args, lur_t* ctx) {
 }
 
 #define STD_TIME_SLEEP_DOC \
-	"seconds\nsleeps the current thread for x amount of " \
+	"seconds\nsleeps the current thread for x number of " \
 	"seconds."
 
 static value_t std_time_sleep(value_t* args, lur_t* ctx) {
@@ -6024,6 +6061,7 @@ static value_t std_rand_text(value_t* args, lur_t* ctx) {
 	size_t length = (size_t)get_number(args[0]);
 	const text_t* charset = get_text(args[1]);
 	text_t* text = text_new(NULL, 0, ctx);
+	if (charset->len == 0) return make_text(text);
 	for (size_t i = 0; i < length; i++)
 		text_push(text,
 			charset->buffer[
@@ -6038,6 +6076,7 @@ static value_t std_rand_text(value_t* args, lur_t* ctx) {
 static value_t std_rand_item(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
+	if (array->len == 0) return make_none();
 	return array->items[(size_t)math_rand(0, array->len)];
 }
 
@@ -6050,7 +6089,7 @@ static value_t std_text_len(value_t* args, lur_t* ctx) {
 }
 
 #define STD_TEXT_CMP_DOC \
-	"a, b\nreturns the alphabetically superior of a and b."
+	"a, b\nreturns the alphabetically first of a and b."
 
 static value_t std_text_cmp(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -6403,6 +6442,31 @@ static value_t std_text_ratio(value_t* args, lur_t* ctx) {
 	size_t len = a->len + b->len;
 	return make_number(
 		(len - text_edit_dist(a, b, ctx)) / (double)len);
+}
+
+#define STD_TEXT_TITLE_DOC \
+	"text\nreturns text in title case."
+	
+static value_t std_text_title(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_TEXT);
+	const text_t* text = get_text(args[0]);
+	if (text->len == 0) return make_text(
+		text_new(NULL, 0, ctx));
+	
+	const char* delim = " _.-+";
+	char* token = strtok(text->buffer, delim);
+	
+	text_t* result = text_new(NULL, 0, ctx);
+	do {
+		token[0] = toupper(token[0]);
+		result = text_concat(result, text_lit(token, ctx), ctx);
+		text_push(result, ' ', ctx);
+	} while ((token = strtok(NULL, delim)));
+	
+	if (result->buffer[result->len - 1] == ' ');
+		text_pop(result, ctx);
+	
+	return make_text(result);
 }
 
 #define STD_ARRAY_LEN_DOC \
@@ -7708,8 +7772,8 @@ void stdlib_load(lur_t* ctx) {
 		STD_MEM_COPY_DOC);
 	stdfun_add(ctx, "deep_copy", 1, std_mem_deep_copy,
 		STD_MEM_DEEP_COPY_DOC);
-	stdfun_add(ctx, "total_ram", 0, std_mem_total_ram,
-		STD_MEM_TOTAL_RAM_DOC);
+	stdfun_add(ctx, "ram", 0, std_mem_ram,
+		STD_MEM_RAM_DOC);
 	stdfun_add(ctx, "free_ram", 0, std_mem_free_ram,
 		STD_MEM_FREE_RAM_DOC);
 	std_set_module(ctx, NULL);
@@ -7902,6 +7966,12 @@ void stdlib_load(lur_t* ctx) {
 	stdvar_add(ctx, "WHITESPACE", make_text(
 		text_lit(" \t\n\r", ctx)),
 		"all whitespace characters.");
+	stdvar_add(ctx, "VOWELS", make_text(
+		text_lit("aeiouy", ctx)),
+		"all vowels in the alphabet");
+	stdvar_add(ctx, "CONSONANTS", make_text(
+		text_lit("bcdfghjklmnpqrstvwxz", ctx)),
+		"all consonants in the alphabet");
 	stdfun_add(ctx, "len", 1, std_text_len,
 		STD_TEXT_LEN_DOC);
 	stdfun_add(ctx, "cmp", 2, std_text_cmp,
@@ -7948,6 +8018,8 @@ void stdlib_load(lur_t* ctx) {
 		STD_TEXT_EDIT_DIST_DOC);
 	stdfun_add(ctx, "ratio", 2, std_text_ratio,
 		STD_TEXT_RATIO_DOC);
+	stdfun_add(ctx, "title", 1, std_text_title,
+		STD_TEXT_TITLE_DOC);
 	std_set_module(ctx, NULL);
 	
 	std_set_module(ctx, "array");
@@ -8104,9 +8176,6 @@ void stdlib_load(lur_t* ctx) {
 		STD_SOCKET_RECV_DOC);
 	stdfun_add(ctx, "close", 1, std_socket_close,
 		STD_SOCKET_CLOSE_DOC);
-	std_set_module(ctx, NULL);
-	
-	std_set_module(ctx, "debug");
 	std_set_module(ctx, NULL);
 	
 	gc_resume(ctx);
