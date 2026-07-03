@@ -478,6 +478,8 @@ typedef enum {
 	T_AND,
 	T_OR,
 	T_NOT,
+	T_SPACE,
+	T_NEWLINE,
 	T_EOF,
 } token_tag_t;
 
@@ -771,6 +773,10 @@ static parse_rule_t RULES[] = {
 		{NULL, ps_binary, PREC_OR},
 	[T_NOT] =
 		{ps_unary, NULL, PREC_NONE},
+	[T_SPACE] =
+		{NULL, NULL, PREC_NONE},
+	[T_NEWLINE] =
+		{NULL, NULL, PREC_NONE},
 	[T_EOF] =
 		{NULL, NULL, PREC_NONE},
 };
@@ -1084,11 +1090,11 @@ static text_t* text_cmp(const text_t* a, const text_t* b) {
 	for (int i = 0; i < (a->len < b->len) ? a->len : b->len; i++) {
 		uint8_t a_ch = tolower(a->buffer[i]);
 		uint8_t b_ch = tolower(b->buffer[i]);
-		if (a_ch < b_ch) return (text_t*)a;
-		if (b_ch < a_ch) return (text_t*) b;
+		if (a_ch < b_ch) return (text_t*)b;
+		if (a_ch > b_ch) return (text_t*)a;
 	}
 	
-	return (a->len > b->len) ? (text_t*)a : (text_t*)b;
+	return (a->len < b->len) ? (text_t*)a : (text_t*)b;
 }
 
 static text_t* text_concat(
@@ -1496,36 +1502,38 @@ static bool array_contains(array_t* array, value_t item) {
 static const char* type_name(type_t type);
 static value_t value_math(value_t, value_t, int, lur_t*);
 
-static void array_sort_impl(
-	array_t* array, size_t n, fref_t* by, lur_t* ctx)
-{
-	assert(array && by && ctx);
-	size_t swapped = 0;
-	for (size_t i = 0; i < n - 1; i++) {
-		value_t a = array->items[i];
-		value_t b = array->items[i + 1];
+static int sort_cmp(const void* ap, const void* bp) {
+	value_t a = *(value_t*)ap;
+	value_t b = *(value_t*)bp;
+	if (a.tag != b.tag)
+		return -INFINITY;
 		
-		value_t args[] = {a, b};
-		value_t result = lur_call_function(ctx, by, args, 2);
-		bool swap = value_eq(result, b);
-		
-		if (swap) {
-			array_swap(array, i, i + 1);
-			swapped++;
-		}
+	if (a.tag == TYPE_NUMBER) {
+		double num_a = get_number(a);
+		double num_b = get_number(b);
+		return (num_a == num_b) ? 0 :
+			(num_a < num_b) ? -1 : 1;
 	}
 	
-	if (swapped != 0) array_sort_impl(array, n - 1, by, ctx);
+	if (a.tag == TYPE_TEXT) {
+		const text_t* text_a = get_text(a);
+		const text_t* text_b = get_text(b);
+		return strcmp(text_a->buffer,
+			text_b->buffer);
+	}
+	
+	return 0;
 }
 
-static array_t* array_sort(
-	const array_t* input, fref_t* by, lur_t* ctx)
-{
-	assert(input && by && ctx);
-	array_t* sorted = array_copy(input, false, ctx);
-	if (sorted->len <= 1) return sorted;
-	array_sort_impl(sorted, sorted->len, by, ctx);
-	return sorted;
+static array_t* array_sort(const array_t* array, lur_t* ctx) {
+	assert(array && ctx);
+	array_t* result = array_copy(array, false, ctx);
+	if (result->len <= 1) return result;
+	qsort(result->items,
+		result->len,
+		sizeof(value_t),
+		sort_cmp);
+	return result;
 }
 
 static array_t* array_flat(const array_t* input, lur_t* ctx) {
@@ -3562,7 +3570,7 @@ static token_t sc_next(scanner_t* sc) {
 		sc->line}
 	#define check(c) \
 		((*sc->pos == (c)) ? sc->pos++, true : false)
-	
+		
 	bool is_in_comment = false;
 	while (isspace((unsigned char)*sc->pos) ||
 		(*sc->pos == '-' && sc->pos[1] == '-')) {
@@ -3593,11 +3601,16 @@ static token_t sc_next(scanner_t* sc) {
 		if (is_in_comment)
 			error(sc->ctx, ERR_UNTERMINATED_COMMENT);
 		
-		if (*sc->pos == '\n')
+		if (*sc->pos == '\n') {
 			sc->line++;
-		sc->pos++;
-	}
+			/*sc->pos++;
+			return make(T_NEWLINE);*/
+		}
 		
+		sc->pos++;
+		//return make(T_SPACE);
+	}
+	
 	const char* start = sc->pos;
 	
 	if (isalpha(*sc->pos) || *sc->pos == '_') {
@@ -3783,6 +3796,11 @@ static void ps_eat(
 	error(ps->ctx, msg);
 }
 
+static void ps_skip_wspace(parser_t* ps) {
+	ps_match(ps, T_SPACE);
+	ps_match(ps, T_NEWLINE);
+}
+
 static ast_node_t* ps_new_node(parser_t* ps) {
 	assert(ps);
 	ast_node_t* node =
@@ -3797,15 +3815,17 @@ static ast_node_t* ps_prec(
 {
 	assert(ps);
 	
+	ps_skip_wspace(ps);
 	ps_next(ps);
 	parse_fn_t prefix_rule = RULES[ps->prev.tag].prefix;
-		
+	
 	if (!prefix_rule)
 		error(ps->ctx, ERR_EXPECTED_EXPR(ps->prev.lex));
 		
 	ps->prefix = prefix_rule(ps);
 	while (prec <= RULES[ps->cur.tag].prec) {
 		ps_next(ps);
+		ps_skip_wspace(ps);
 		parse_fn_t infix_rule = RULES[ps->prev.tag].infix;
 		ps->prefix = infix_rule(ps);
 	}
@@ -3881,7 +3901,16 @@ static ast_node_t* ps_name(parser_t* ps) {
 		return node;
 	}
 	
-	/*if (ps_check(ps, T_NAME)) {
+	/*bool has_arg = ps_check(ps, T_NAME) ||
+		ps_check(ps, T_NONE) ||
+		ps_check(ps, T_FALSE) ||
+		ps_check(ps, T_TRUE) ||
+		ps_check(ps, T_NUMBER) ||
+		ps_check(ps,  T_TEXT) ||
+		ps_check(ps, T_LSQUARE) ||
+		ps_check(ps, T_LCURLY);
+	
+	if (has_arg) {
 		node->tag = AST_CALL;
 		node->data.call.func = ps->prefix;
 		node->data.call.argc = 0;
@@ -4964,7 +4993,9 @@ static value_t std_help(value_t* args, lur_t* ctx) {
 	const text_t* name = get_text(args[0]);
 	
 	if (text_eq(name, text_lit("all", ctx))) {
-		text_t* text = text_new(NULL, 0, ctx);
+		text_t* text = text_fmt(ctx,
+			"== docs (%ld entries) ==\n", ctx->help->len);
+		
 		for (size_t i = 0; i < ctx->help->len; i++) {
 			const map_entry_t* entry = &ctx->help->entries[i];
 			if (entry->key.tag == TYPE_NONE) continue;
@@ -5118,7 +5149,7 @@ static value_t std_as_text(value_t* args, lur_t* ctx) {
 
 #define STD_LOOP_DOC \
 	"n, fn\ncreates a loop that calls the function fn n "  \
-	"times with the current index as argument ."
+	"times with the current count as argument ."
 
 static value_t std_loop(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
@@ -5191,26 +5222,6 @@ static value_t std_range_inc(value_t* args, lur_t* ctx) {
 		for (int64_t i = start; i >= end; i--)
 			array_push(array, make_number(i), ctx);
 	return make_array(array);
-}
-
-#define STD_DEFAULT_SORT_DOC \
-	"a, b\ndefault sorting function, used by array.sort."
-
-static value_t std_default_sort(value_t* args, lur_t* ctx) {
-	value_t a = args[0];
-	value_t b = args[1];
-	if (a.tag == TYPE_NUMBER) {
-		if (b.tag != TYPE_NUMBER) \
-			error(ctx, ERR_TYPECHECK(
-				b.tag, TYPE_NUMBER));
-		return get_bool(value_math(a, b, OP_LT, ctx)) ? a : b;
-		
-	} else if (a.tag == TYPE_TEXT) {
-		if (b.tag != TYPE_TEXT) \
-			error(ctx, ERR_TYPECHECK(b.tag, TYPE_TEXT));
-		return text_cmp(get_text(a), get_text(b)) ? b : a;
-	}
-	return a;
 }
 
 #define STD_ENUM_DOC \
@@ -6088,17 +6099,6 @@ static value_t std_text_len(value_t* args, lur_t* ctx) {
 	return make_number(get_text(args[0])->len);
 }
 
-#define STD_TEXT_CMP_DOC \
-	"a, b\nreturns the alphabetically first of a and b."
-
-static value_t std_text_cmp(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_TEXT);
-	typecheck(1, TYPE_TEXT);
-	const text_t* a = get_text(args[0]);
-	const text_t* b = get_text(args[1]);
-	return make_text(text_cmp(a, b));
-}
-
 #define STD_TEXT_BYTES_DOC \
 	"text\nreturns an array containing the characters that " \
 	"make up a string."
@@ -6902,31 +6902,12 @@ static value_t std_array_all(value_t* args, lur_t* ctx) {
 }
 
 #define STD_ARRAY_SORT_DOC \
-	"array\nsorts the array using the default_sort function."
+	"array\nsorts the array."
 
 static value_t std_array_sort(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
-	value_t value;
-	bool get = map_get(ctx->vm.names,
-		make_text(text_lit("default_sort", ctx)), &value, ctx);
-	if (!get || value.tag != TYPE_FREF)
-		error(ctx,  ERR_NOT_IMPLEMENTED(
-			"function 'default_sort'"));
-	fref_t* sorter = get_fref(value);
 	return make_array(array_sort(
-		get_array(args[0]), sorter, ctx));
-}
-
-#define STD_ARRAY_SORT_BY_DOC \
-	"array, sort_fn\nsorts the list using a custom sort " \
-	"function. the function takes a and b and should " \
-	"return the smaller value."
-
-static value_t std_array_sort_by(value_t* args, lur_t* ctx) {
-	typecheck(0, TYPE_ARRAY);
-	typecheck(1, TYPE_FREF);
-	return make_array(array_sort(
-		get_array(args[0]), get_fref(args[1]), ctx));
+		get_array(args[0]), ctx));
 }
 
 #define STD_ARRAY_SWAP_DOC \
@@ -7758,8 +7739,6 @@ void stdlib_load(lur_t* ctx) {
 		STD_RANGE_DOC);
 	stdfun_add(ctx, "range_inc", 2, std_range_inc,
 		STD_RANGE_INC_DOC);
-	stdfun_add(ctx, "default_sort", 2, std_default_sort,
-		STD_DEFAULT_SORT_DOC);
 	stdfun_add(ctx, "enum", 1, std_enum,
 		STD_ENUM_DOC);
 	stdfun_add(ctx, "assert", 1, std_assert,
@@ -7974,8 +7953,6 @@ void stdlib_load(lur_t* ctx) {
 		"all consonants in the alphabet");
 	stdfun_add(ctx, "len", 1, std_text_len,
 		STD_TEXT_LEN_DOC);
-	stdfun_add(ctx, "cmp", 2, std_text_cmp,
-		STD_TEXT_CMP_DOC);
 	stdfun_add(ctx, "bytes", 1, std_text_bytes,
 		STD_TEXT_BYTES_DOC);
 	stdfun_add(ctx, "ascii", 1, std_text_ascii,
@@ -8079,8 +8056,6 @@ void stdlib_load(lur_t* ctx) {
 		STD_ARRAY_ALL_DOC);
 	stdfun_add(ctx, "sort", 1, std_array_sort,
 		STD_ARRAY_SORT_DOC);
-	stdfun_add(ctx, "sort_by", 2, std_array_sort_by,
-		STD_ARRAY_SORT_BY_DOC);
 	stdfun_add(ctx, "swap", 3, std_array_swap,
 		STD_ARRAY_SWAP_DOC);
 	stdfun_add(ctx, "join", 1, std_array_join,
