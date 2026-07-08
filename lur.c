@@ -25,7 +25,7 @@
 #define LUR_VERSION_PATCH 0
 
 #define LUR_REPL_GREETING \
-	"use 'help: \"all\"' to view the documentation."
+	"use help: \"all\" to view the documentation."
 
 #define LUR_DEBUG_ASSERTS 1
 #define LUR_DEBUG_PRINT_CODE 0
@@ -77,31 +77,6 @@
 	"failed to open file '%.*s' in mode '%.*s'", \
 		(path)->len, (path)->buffer, \
 		(mode)->len, (mode)->buffer
-#define ERR_INVALID_HANDLE(handle) \
-	"invalid file handle '%d'", (handle)
-#define ERR_THREAD_SPAWN_FAILED(code) \
-	"thread.spawn failed (%d)", (code)
-#define ERR_INVALID_THREAD_ID(id) \
-	"invalid thread id '%d'", (id)
-#define ERR_SOCKET_CREATE(msg) \
-	"creating socket failed: %s", (msg)
-#define ERR_SOCKET_RESOLVE_FAILED(addr) \
-	"failed to resolve hostname '%.*s'", \
-		(addr->len), (addr->buffer)
-#define ERR_SOCKET_CONNECT(addr, port, msg) \
-	"failed to connect to %.*s:%d: %s", \
-		(addr->len), (addr->buffer), (port), (msg)
-#define ERR_SOCKET_BIND(addr, port, msg) \
-	"failed to bind socket to %.*s:%d: %s", \
-		(addr->len), (addr->buffer), (port), (msg)
-#define ERR_SOCKET_LISTEN_FAILED(msg) \
-	"socket.listen failed: %s", (msg)
-#define ERR_SOCKET_ACCEPT_FAILED(msg) \
-	"socket.accept failed: %s", (msg)
-#define ERR_SOCKET_SEND_FAILED(msg) \
-	"socket.send failed: %s", (msg)
-#define ERR_SOCKET_RECV_FAILED(msg) \
-	"socket.recv failed: %s", (msg)
 #define ERR_UNKNOWN_CHAR(c) \
 	"unknown character '%c' (ASCII %d)", (c), (c)
 #define ERR_EXPECTED_EXPR(got) \
@@ -118,9 +93,13 @@
 		type_name(got), type_name(wanted)
 #define ERR_TYPECHECK_ARG(got, wanted, arg) \
 	"got type %s for arg #%d but expected %s", \
-		type_name(got), (arg), type_name(wanted)
+		type_name(got), (arg + 1), type_name(wanted)
 #define ERR_UNDEFINED(name, ctx) \
 	"undefined variable: '%.*s'", \
+		value_to_text(name, ctx)->len, \
+		value_to_text(name, ctx)->buffer
+#define ERR_ALREADY_DEFINED(name, ctx) \
+	"'%.*s' already defined", \
 		value_to_text(name, ctx)->len, \
 		value_to_text(name, ctx)->buffer
 #define ERR_KEY(key) \
@@ -145,6 +124,35 @@
 	"remainder of division by zero"
 #define ERR_ASSERTION \
 	"assertion failed"
+#define ERR_THREAD_SPAWN_FAILED(code) \
+	"thread.spawn failed (%d)", (code)
+#define ERR_INVALID_THREAD_ID(id) \
+	"invalid thread id '%d'", (id)
+#define ERR_SOCKET_CREATE(msg) \
+	"creating socket failed: %s", (msg)
+#define ERR_SOCKET_RESOLVE_FAILED(addr) \
+	"failed to resolve hostname '%.*s'", \
+		(addr->len), (addr->buffer)
+#define ERR_SOCKET_CONNECT(addr, port, msg) \
+	"failed to connect to %.*s:%d: %s", \
+		(addr->len), (addr->buffer), (port), (msg)
+#define ERR_SOCKET_BIND(addr, port, msg) \
+	"failed to bind socket to %.*s:%d: %s", \
+		(addr->len), (addr->buffer), (port), (msg)
+#define ERR_SOCKET_LISTEN_FAILED(msg) \
+	"socket.listen failed: %s", (msg)
+#define ERR_SOCKET_ACCEPT_FAILED(msg) \
+	"socket.accept failed: %s", (msg)
+#define ERR_SOCKET_SEND_FAILED(msg) \
+	"socket.send failed: %s", (msg)
+#define ERR_SOCKET_RECV_FAILED(msg) \
+	"socket.recv failed: %s", (msg)
+#define ERR_SOCKET_CLOSE_FAILED \
+	"socket.close failed (invalid handle?)"
+#define ERR_UNIT_NOT_FOUND(name) \
+	"unit not found: '%.*s'", ((int)name->len), (name->buffer)
+#define ERR_UNITS_INCOMPATIBLE(from, to) \
+	"units incompatible: '%s' and '%s'", (from), (to)
 
 #if LUR_DEBUG_ASSERTS
 #define unreachable() \
@@ -2043,7 +2051,7 @@ static text_t* value_to_text_ex(
 		if (trunc(number) == number && number != INFINITY)
 			result = text_fmt(ctx, "%d", (long)number);
 		else
-			result = text_fmt(ctx, "%f", number);
+			result = text_fmt(ctx, "%.9f", number);
 		break;
 	}
 	case TYPE_TEXT: {
@@ -3360,6 +3368,9 @@ static value_t vm_launch(
 		}
 		case OP_ADDGLOB: {
 			value_t key = vm->fp->func->data[read_u16()];
+			if (map_get(vm->names, key, NULL, vm->ctx))
+				error(vm->ctx, ERR_ALREADY_DEFINED(key,
+					vm->ctx));
 			map_set(vm->names, key, get(0), vm->ctx);
 			pop();
 			break;
@@ -4408,6 +4419,15 @@ static void cl_push_value(comp_t* cl, value_t value) {
 static void cl_add_sym(comp_t* cl, const text_t* name) {
 	assert(cl && name);
 	
+	/*if (cl->nsyms > 0) {
+		for (int64_t i = cl->nsyms - 1; i >= 0; i--)
+			if (text_eq(name, cl->syms[i].name) &&
+				cl->syms[i].depth == cl->depth)
+				error(cl->ctx, ERR_ALREADY_DEFINED(
+					make_text(name), cl->ctx));
+	}*/
+	// TODO: fix
+	
 	sym_t sym;
 	sym.name = name;
 	sym.depth = cl->depth;
@@ -4960,7 +4980,7 @@ static void cl_compile(
 		
 		slot = func_write_value(
 			cl->func,
-			make_text(text_lit("print", cl->ctx)),
+			make_text(text_lit("put", cl->ctx)),
 			cl->ctx);
 		cl_write(cl, OP_GETFIELD);
 		cl_write(cl, (slot >> 8) & 0xff);
@@ -4985,8 +5005,8 @@ static text_t* io_read(const text_t*, lur_t*);
 
 #define STD_HELP_DOC \
 	"name\n" \
-	"shows help text for a function or variable. " \
-	"use 'help: \"all\"' to see all documentation."
+	"shows help text for a function or variable.\n" \
+	"use help: \"all\" to see all documentation."
 	
 static value_t std_help(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
@@ -5001,7 +5021,7 @@ static value_t std_help(value_t* args, lur_t* ctx) {
 			if (entry->key.tag == TYPE_NONE) continue;
 			
 			text = text_concat(text,
-				text_fmt(ctx, "%s %s\n\n",
+				text_fmt(ctx, "|| %s %s\n",
 					get_text(entry->key)->buffer,
 					(entry->value.tag == TYPE_TEXT) ?
 						get_text(entry->value)->buffer :
@@ -5011,17 +5031,30 @@ static value_t std_help(value_t* args, lur_t* ctx) {
 		return make_text(text);
 	}
 	
-	value_t help_text;
-	if (!map_get(ctx->help, args[0], &help_text, ctx))
-		return make_text(text_fmt(ctx,
-			"no associated docstring found for variable '%s'",
-			get_text(args[0])->buffer));
+	text_t* docs = text_new(NULL, 0, ctx);
+	int results = 0;
+	for (size_t i = 0; i < ctx->help->len; i++) {
+		map_entry_t* entry = &ctx->help->entries[i];
+		if (entry->key.tag != TYPE_TEXT) continue;
+		if (entry->value.tag != TYPE_TEXT) continue;
+		
+		if (strncmp(get_text(entry->key)->buffer,
+			name->buffer,
+			name->len) == 0)
+		{
+			docs = text_concat(docs,
+				text_fmt(ctx, "|| %s %s\n",
+					get_text(entry->key)->buffer,
+					get_text(entry->value)->buffer),
+				ctx);
+			results++;
+		}
+	}
 	
-	return make_text(text_fmt(ctx, "%s %s\n",
-			get_text(args[0])->buffer,
-			(help_text.tag == TYPE_TEXT) ?
-				get_text(help_text)->buffer :
-				text_lit("none", ctx)->buffer));
+	if (results == 0)
+		return make_text(text_lit("docstring not found", ctx));
+	
+	return make_text(docs);
 }
 
 #define STD_LOAD_DOC \
@@ -5145,6 +5178,13 @@ static value_t std_as_number(value_t* args, lur_t* ctx) {
 
 static value_t std_as_text(value_t* args, lur_t* ctx) {
 	return make_text(value_to_text(args[0], ctx));
+}
+
+#define STD_ID_DOC \
+	"x\nfun x -> x."
+	
+static value_t std_id(value_t* args, lur_t* ctx) {
+	return args[0];
 }
 
 #define STD_LOOP_DOC \
@@ -6091,6 +6131,36 @@ static value_t std_rand_item(value_t* args, lur_t* ctx) {
 	return array->items[(size_t)math_rand(0, array->len)];
 }
 
+#define STD_RAND_DIR_DOC \
+	"\nreturns a 3D vector containing a random direction."
+	
+static value_t std_rand_dir(value_t* args, lur_t* ctx) {
+	array_t* vec = array_new(ctx);
+	array_push(vec,
+		make_number(math_rand(-1.0, 1.0)), ctx);
+	array_push(vec,
+		make_number(math_rand(-1.0, 1.0)), ctx);
+	array_push(vec,
+		make_number(math_rand(-1.0, 1.0)), ctx);
+	
+	double size = 0.0;
+	for (size_t i = 0; i < vec->len; i++) {
+		double number = get_number(vec->items[i]);
+		size += number * number;
+	}
+	
+	size = sqrt(size);
+	
+	if (size > 0.0) {
+		for (size_t i = 0; i < vec->len; i++) {
+			vec->items[i] = make_number(
+				get_number(vec->items[i]) / size);
+		}
+	}
+	
+	return make_array(vec);
+}
+
 #define STD_TEXT_LEN_DOC \
 	"text\nreturns the length of the text."
 
@@ -6133,7 +6203,8 @@ static value_t std_text_words(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	
-	const text_t* text = get_text(args[0]);
+	const text_t* original = get_text(args[0]);
+	text_t* text = text_copy(original, ctx);
 	const text_t* delim = get_text(args[1]);
 	array_t* tokens = array_new(ctx);
 	
@@ -6918,17 +6989,50 @@ static value_t std_array_swap(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
-	const array_t* input = get_array(args[0]);
-	array_t* output = array_copy(input, false, ctx);
+	const array_t* array = get_array(args[0]);
+	array_t* result = array_copy(array, false, ctx);
 	
 	size_t a = array_convert_index(
-		input, get_number(args[1]), ctx);
+		array, get_number(args[1]), ctx);
 	
 	size_t b = array_convert_index(
-		input, get_number(args[2]), ctx);
+		array, get_number(args[2]), ctx);
 	
-	array_swap(output, a, b);
-	return make_array(output);
+	array_swap(result, a, b);
+	return make_array(result);
+}
+
+#define STD_ARRAY_MOVE_DOC \
+	"array, start, end, pos\nmoves the items contained " \
+	"within start and end to the index pos in the array."
+	
+static value_t std_array_move(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_NUMBER);
+	typecheck(2, TYPE_NUMBER);
+	typecheck(3, TYPE_NUMBER);
+	array_t* array = get_array(args[0]);
+	
+	size_t start = array_convert_index(
+		array, get_number(args[1]), ctx);
+		
+	size_t end = array_convert_index(
+		array, get_number(args[2]), ctx);
+		
+	size_t pos = array_convert_index(
+		array, get_number(args[3]), ctx);
+		
+	array_t* region = array_new(ctx);
+	for (size_t i = start; i < end; i++)
+		array_push(region, array->items[i], ctx);
+	
+	for (size_t i = start; i < end; i++)
+		array_del(array, start, ctx);
+	
+	for (size_t i = 0; i < region->len; i++)
+		array_insert(array, pos + i, region->items[i], ctx);
+	
+	return make_none();
 }
 
 #define STD_ARRAY_JOIN_DOC \
@@ -7351,10 +7455,10 @@ static size_t io_file_size(const text_t* path, lur_t* ctx) {
 	return len;
 }
 
-#define STD_IO_PRINT_DOC \
+#define STD_IO_PUT_DOC \
 	"value\nprints the provided value to standard output."
 
-static value_t std_io_print(value_t* args, lur_t* ctx) {
+static value_t std_io_put(value_t* args, lur_t* ctx) {
 	value_print(args[0], ctx);
 	lur_printf("\n");
 	return make_none();
@@ -7498,7 +7602,7 @@ static value_t std_socket_connect(value_t* args, lur_t* ctx)
 	
 	struct hostent* ent = gethostbyname(
 		(const char*)ip->buffer);
-	if (!ent)
+	if (!ent) 
 		error(ctx, ERR_SOCKET_RESOLVE_FAILED(ip));
 	
 	struct sockaddr_in addr;
@@ -7621,8 +7725,82 @@ static value_t std_socket_recv(value_t* args, lur_t* ctx) {
 static value_t std_socket_close(value_t* args, lur_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int handle = (int)get_number(args[0]);
-	close(handle);
+	int result = close(handle);
+	if (result == -1)
+		error(ctx, ERR_SOCKET_CLOSE_FAILED);
 	return make_none();
+}
+
+typedef struct {
+	const char* name;
+	const char* base;
+	double scale;
+} unit_t;
+
+static unit_t units[] = {
+	(unit_t){"B", "B", 1.0},
+	(unit_t){"kB", "B", 1000.0},
+	(unit_t){"mB", "B", 1000.0 * 1000.0},
+	(unit_t){"gB", "B", 1000.0 * 1000.0 * 1000.0},
+	(unit_t){"KiB", "B", 1024.0},
+	(unit_t){"MiB", "B", 1024.0 * 1024.0},
+	(unit_t){"GiB", "B", 1024.0 * 1024.0 * 1024.0},
+	
+	(unit_t){"g", "g", 1.0},
+	(unit_t){"kg", "g", 1000.0},
+	(unit_t){"ton", "g", 1000.0 * 1000.0},
+	
+	(unit_t){"nm", "nm", 1.0},
+	(unit_t){"um", "nm", 1000.0},
+	(unit_t){"mm", "nm", 1000.0 * 1000.0},
+	(unit_t){"cm", "nm", 1000.0 * 1000.0 * 1000.0},
+	(unit_t){"dm", "nm", 1000.0 * 1000.0 * 1000.0 * 1000.0},
+	(unit_t){"m", "nm",
+		1000.0 * 1000.0 * 1000.0 * 1000.0 * 1000.0},
+	(unit_t){"km", "nm",
+		1000.0 * 1000.0 * 1000.0 * 1000.0 * 1000.0 *
+			1000.0},
+};
+
+static unit_t* find_unit(const char* name) {
+	size_t len = sizeof(units) / sizeof(units[0]);
+	for (size_t i = 0; i < len; i++) {
+		unit_t* unit = &units[i];
+		if (strcasecmp(name, unit->name) == 0)
+			return unit;
+	}
+	return NULL;
+}
+
+#define STD_UNIT_CONVERT_DOC \
+	"x, from, to\nconverts x from one unit to another."
+
+static value_t std_unit_convert(value_t* args, lur_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_TEXT);
+	typecheck(2, TYPE_TEXT);
+	
+	double x = get_number(args[0]);
+	text_t* from = get_text(args[1]);
+	text_t* to = get_text(args[2]);
+	
+	unit_t* from_unit = find_unit((const char*)from->buffer);
+	if (!from_unit)
+		error(ctx, ERR_UNIT_NOT_FOUND(from));
+		
+	unit_t* base_unit = find_unit(from_unit->base);
+		
+	unit_t* to_unit = find_unit((const char*)to->buffer);
+	if (!to_unit)
+		error(ctx, ERR_UNIT_NOT_FOUND(to));
+		
+	if (strcmp(from_unit->base, to_unit->base) != 0)
+		error(ctx, ERR_UNITS_INCOMPATIBLE(
+			from->buffer, to->buffer));
+	
+	double temp = x / (base_unit->scale / from_unit->scale);
+	double result = temp / to_unit->scale;
+	return make_number(result);
 }
 
 #undef typecheck
@@ -7731,6 +7909,8 @@ void stdlib_load(lur_t* ctx) {
 		STD_AS_NUMBER_DOC);
 	stdfun_add(ctx, "as_text", 1, std_as_text,
 		STD_AS_TEXT_DOC);
+	stdfun_add(ctx, "id", 1, std_id,
+		STD_ID_DOC);
 	stdfun_add(ctx, "loop", 2, std_loop,
 		STD_LOOP_DOC);
 	stdfun_add(ctx, "while", 1, std_while,
@@ -7820,6 +8000,9 @@ void stdlib_load(lur_t* ctx) {
 		"a value representing infinity.");
 	stdvar_add(ctx, "NAN", make_number(NAN),
 		"value representing Not a Number.");
+	stdvar_add(ctx, "EPS", make_number(
+		2.2204460492503131e-16),
+		"machine epsilon.");
 	stdfun_add(ctx, "eqf", 3, std_math_eqf,
 		STD_MATH_EQF_DOC);
 	stdfun_add(ctx, "bit_shl", 2, std_math_bit_shl,
@@ -7904,11 +8087,17 @@ void stdlib_load(lur_t* ctx) {
 	
 	std_set_module(ctx, "vec");
 	stdvar_add(ctx, "X", make_array(lur_new_num_array(
-		(const double[]){1, 0, 0}, 3, ctx)), "global X axis");
+		(const double[]){1, 0, 0}, 3, ctx)), "global X axis.");
 	stdvar_add(ctx, "Y", make_array(lur_new_num_array(
-		(const double[]){0, 1, 0}, 3, ctx)), "global Y axis");
+		(const double[]){0, 1, 0}, 3, ctx)), "global Y axis.");
 	stdvar_add(ctx, "Z", make_array(lur_new_num_array(
-		(const double[]){0, 0, 1}, 3, ctx)), "global Z axis");
+		(const double[]){0, 0, 1}, 3, ctx)), "global Z axis.");
+	stdvar_add(ctx, "ZERO",
+		make_array(lur_new_num_array(
+			(const double[]){0, 0, 0}, 3, ctx)), "[0, 0, 0].");
+	stdvar_add(ctx, "ONE",
+		make_array(lur_new_num_array(
+			(const double[]){1, 1, 1}, 3, ctx)), "[1, 1, 1].");
 	stdfun_add(ctx, "size", 1, std_vec_size,
 		STD_VEC_SIZE_DOC);
 	stdfun_add(ctx, "norm", 1, std_vec_norm,
@@ -7930,6 +8119,8 @@ void stdlib_load(lur_t* ctx) {
 		STD_RAND_TEXT_DOC);
 	stdfun_add(ctx, "item", 1, std_rand_item,
 		STD_RAND_ITEM_DOC);
+	stdfun_add(ctx, "dir", 0, std_rand_dir,
+		STD_RAND_DIR_DOC);
 	std_set_module(ctx, NULL);
 	
 	std_set_module(ctx, "text");
@@ -7947,10 +8138,10 @@ void stdlib_load(lur_t* ctx) {
 		"all whitespace characters.");
 	stdvar_add(ctx, "VOWELS", make_text(
 		text_lit("aeiouy", ctx)),
-		"all vowels in the alphabet");
+		"all vowels in the alphabet.");
 	stdvar_add(ctx, "CONSONANTS", make_text(
 		text_lit("bcdfghjklmnpqrstvwxz", ctx)),
-		"all consonants in the alphabet");
+		"all consonants in the alphabet.");
 	stdfun_add(ctx, "len", 1, std_text_len,
 		STD_TEXT_LEN_DOC);
 	stdfun_add(ctx, "bytes", 1, std_text_bytes,
@@ -8058,6 +8249,8 @@ void stdlib_load(lur_t* ctx) {
 		STD_ARRAY_SORT_DOC);
 	stdfun_add(ctx, "swap", 3, std_array_swap,
 		STD_ARRAY_SWAP_DOC);
+	stdfun_add(ctx, "move", 4, std_array_move,
+		STD_ARRAY_MOVE_DOC);
 	stdfun_add(ctx, "join", 1, std_array_join,
 		STD_ARRAY_JOIN_DOC);
 	stdfun_add(ctx, "zip", 1, std_array_zip,
@@ -8105,8 +8298,8 @@ void stdlib_load(lur_t* ctx) {
 	std_set_module(ctx, NULL);
 	
 	std_set_module(ctx, "io");
-	stdfun_add(ctx, "print", 1, std_io_print,
-		STD_IO_PRINT_DOC);
+	stdfun_add(ctx, "put", 1, std_io_put,
+		STD_IO_PUT_DOC);
 	stdfun_add(ctx, "input", 0, std_io_input,
 		STD_IO_INPUT_DOC);
 	stdfun_add(ctx, "read", 1, std_io_read,
@@ -8151,6 +8344,11 @@ void stdlib_load(lur_t* ctx) {
 		STD_SOCKET_RECV_DOC);
 	stdfun_add(ctx, "close", 1, std_socket_close,
 		STD_SOCKET_CLOSE_DOC);
+	std_set_module(ctx, NULL);
+	
+	std_set_module(ctx, "unit");
+	stdfun_add(ctx, "convert", 3, std_unit_convert,
+		STD_UNIT_CONVERT_DOC);
 	std_set_module(ctx, NULL);
 	
 	gc_resume(ctx);
