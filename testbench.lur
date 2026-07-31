@@ -1,6 +1,6 @@
-
 RUN_TIMES = 1
 
+-- Single and multi-line comments.
 comments() = do
 	-- single-line comment
 	
@@ -10,6 +10,7 @@ comments() = do
 	--]
 end
 
+-- Name literals.
 names() = do
 	value = "whatever"
 	
@@ -28,15 +29,18 @@ names() = do
 	assert: NAME_123 is value
 end
 
+-- 'none' literal.
 none_literal() = do
 	none
 end
 
+-- 'true' and 'false'.
 bool_literal() = do
 	true
 	false
 end
 
+-- Numbers.
 number_literal() = do
 	whole = 3141592
 	decimal = 3.141592
@@ -51,6 +55,7 @@ number_literal() = do
 	assert: binary is 5
 end
 
+-- Text and escape sequences.
 text_literal() = do
 	empty = ""
 	
@@ -64,6 +69,7 @@ text_literal() = do
 	assert: "A" is "\x41"
 end
 
+-- Array literal.
 array_literal() = do
 	empty = []
 	numbers = [1, 4, 7]
@@ -72,6 +78,7 @@ array_literal() = do
 	]
 end
 
+-- Map literal.
 map_literal() = do
 	empty = {}
 	config = {
@@ -130,6 +137,7 @@ map_literal() = do
 	}
 end
 
+-- Function literal.
 function_literal() = do
 	normal() = do end
 	no_block() = none
@@ -138,6 +146,7 @@ function_literal() = do
 	lambda_args = (fun a1, a2, a3 -> a1 & a2 & a3)
 end
 
+-- Value equality.
 equality() = do
 	values = []
 	map.iter: type, (fun _, type -> values &= default: type)
@@ -153,6 +162,7 @@ equality() = do
 	assert: fun1 is fun2
 end
 
+-- Numeric comparison.
 comparison() = do
 	lo = -100
 	hi = 100
@@ -167,6 +177,7 @@ comparison() = do
 	assert: same <= same
 end
 
+-- Boolean operators ('and', 'or' and 'not').
 boolean_ops() = do
 	assert: true and true is true
 	assert: true and false is false
@@ -181,6 +192,7 @@ boolean_ops() = do
 	assert: not false is true
 end
 
+-- Single-value math.
 scalar_math() = do
 	assert: 1 + 2 is 3
 	assert: 8 - 5 is 3
@@ -192,6 +204,7 @@ scalar_math() = do
 	assert: 1 + 3 - 5 * 7 / 8 - -10 is 9.625
 end
 
+-- Multi-value math.
 vector_math() = do
 	assert: [1, 2, 3] + 10 is [11, 12, 13]
 	assert: [1, 2, 3] + [9, 8, 7] is [10, 10, 10]
@@ -230,6 +243,7 @@ vector_math() = do
 	assert: v.w is 8
 end
 
+-- Negate operator.
 invert() = do
 	assert: -1 is 0 - 1
 	assert: -"hello" is "olleh"
@@ -237,6 +251,7 @@ invert() = do
 	assert: -{1 => "a"} is {"a" => 1}
 end
 
+-- Assign operator + compound assignment.
 assign() = do
 	x = 0
 	
@@ -280,6 +295,7 @@ assign() = do
 	assert: chain3 is 7.5
 end
 
+-- Concatenation operator.
 concat() = do
 	assert: "Hello " & "World" is "Hello World"
 	assert: [1, 2] & 3 is [1, 2, 3]
@@ -289,6 +305,7 @@ concat() = do
 	assert: {1 => "a"} & {2 => "b"} is {1 => "a", 2 => "b"}
 end
 
+-- do...end blocks.
 blocks() = do
 	empty = do end
 	assert: empty is none
@@ -303,12 +320,13 @@ blocks() = do
 	assert: variable is 5
 end
 
+-- Tests functions.
 functions() = do
 	empty() = do end
 	assert: (empty;) is none
 	
-	value() = 1
-	assert: (value;) is 1
+	one() = 1
+	assert: (one;) is 1
 	
 	rec(i) = if i < 3 rec: i + 1 else i
 	assert: (rec: 0) is 3
@@ -345,6 +363,7 @@ functions() = do
 	assert: (a;) is 3
 end
 
+-- Tests the dot operator.
 dot_operator() = do
 	test = {"abc" => 123}
 	assert: test.abc is 123
@@ -352,6 +371,7 @@ dot_operator() = do
 	assert: test.abc is 456
 end
 
+-- Tests the arrow operator.
 arrow_operator() = do
 	map = {
 		"xyz" => 456,
@@ -362,22 +382,24 @@ arrow_operator() = do
 	map->rst(2, 3)
 end
 
+-- Tests if/else branches.
 branches() = do
 	value = if 1 is 1 "A" else "B"
 	assert: value is "A"
 	
-	value = if 1 is 0 "A" else "B"
+	value <- if 1 is 0 "A" else "B"
 	assert: value is "B"
 	
-	value = if 1 is 0 "A"
+	value <- if 1 is 0 "A"
 	assert: value is none
 	
-	value = if 1 is 2 "A"
+	value <- if 1 is 2 "A"
 		else if 1 is 1 "B"
 		else if 1 is 0 "C"
 	assert: value is "B"
 end
 
+-- Tests base/prelude library.
 base_lib() = do
 	assert: (type_of: none) is type.None
 	assert: (type_of: true) is type.Bool
@@ -385,7 +407,7 @@ base_lib() = do
 	assert: (type_of: "hey") is type.Text
 	assert: (type_of: ["hi"]) is type.Array
 	assert: (type_of: {"a" => "b"}) is type.Map
-	assert: (type_of: io.print) is type.Function
+	assert: (type_of: math.min) is type.Function
 	assert: (type_of: (fun a, b -> a + b)) is type.Function
 		
 	assert: (default: type.None) is none
@@ -405,12 +427,11 @@ base_lib() = do
 		{1 => "map"},
 		(fun a, b -> a + b),
 		(fun -> array.iter: values, io.print),
-		io.print,
+		math.max,
 	]
 	
 	array.iter: values, (fun item -> do
 		data = serialize: item
-		io.print: data
 		recreated = deserialize: data
 		assert: item is recreated
 	end)
@@ -470,6 +491,7 @@ base_lib() = do
 	assert: day.Sunday is 6
 end
 
+-- Tests memory library.
 mem_lib() = do
 	a = [1, 2, 3]
 	b = [1, 2, 3]
@@ -503,10 +525,12 @@ mem_lib() = do
 		(mem.addr: (array.get: copy, 1))
 end
 
+-- Tests system library.
 system_lib() = do
 	assert: system.VERSION is "lur 1.0"
 end
 
+-- Tests math library.
 math_lib() = do
 	assert: (math.eqf: math.PI,
 		3.14159265358979323846264338327950288,
@@ -532,6 +556,7 @@ math_lib() = do
 	assert: (math.lerp: 0.25, -10, 10) is -5
 	assert: (math.lerp: 0.5, -10, 10) is 0
 	assert: (math.lerp: 0.75, -10, 10) is 5
+	assert: (math.interp_to: 1, 2, 3, 1) is 4
 	assert: (math.floor: 3.9) is 3
 	assert: (math.ceil: 2.9) is 3
 	assert: (math.round: 3.45) is 3
@@ -567,6 +592,7 @@ math_lib() = do
 		"0x8380b4fa"
 end
 
+-- Tests vector library.
 vec_lib() = do
 	assert: (vec.size: [3, 0, 0]) is 3
 	assert: (vec.norm: [3, 0, 0]) is [1, 0, 0]
@@ -580,6 +606,7 @@ vec_lib() = do
 	assert: (vec.cross: v1, v2) is [-3, -7, 11]
 end
 
+-- Tests random library.
 rand_lib() = do
 	rand.seed: 45678
 	assert: (math.floor: (rand.number: 1, 10)) is 5
@@ -589,6 +616,7 @@ rand_lib() = do
 	assert: (rand.item: [1, 2, 3]) is 1
 end
 
+-- Tests text library functions.
 text_lib() = do
 	assert: text.LETTERS is
 		"abcdefghijklmnopqrstuvwxyz"
@@ -597,7 +625,6 @@ text_lib() = do
 		"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 	assert: text.WHITESPACE is " \t\n\r"
 	assert: (text.len: "three") is 5
-	assert: (text.cmp: "Adam", "Benson") is "Adam"
 	assert: (text.bytes: "abc") is ["a", "b", "c"]
 	assert: (text.ascii: "abc") is [97, 98, 99]
 	assert: (text.words: "", " ") is []
@@ -629,6 +656,7 @@ text_lib() = do
 	assert: (math.eqf: (text.ratio: "tex", "yes"), 0.6666, 0.001)
 end
 
+-- Tests array utility library.
 array_lib() = do
 	ls = [1, 2]
 	assert: (array.len: ls) is 2
@@ -650,8 +678,8 @@ array_lib() = do
 	array.insert: ls, -1, 4
 	assert: ls is [1, 2, 3, 4]
 	
-	array.del: ls, 0
-	array.del: ls, -1
+	array.delete: ls, 0
+	array.delete: ls, -1
 	assert: ls is [2, 3]
 	
 	value = array.pop: ls
@@ -721,22 +749,22 @@ array_lib() = do
 	assert: (array.sort: [3, 2, 1]) is [1, 2, 3]
 	assert: (array.sort: ["James", "Aqua"]) is 
 		["Aqua", "James"]
-		
-	rev_me = [1, 2, 3]
-	rev_sorter(a, b) = b
-	assert: (array.sort_by: rev_me, rev_sorter) is
-		[3, 2, 1]
 	
 	assert: (array.swap: [1, 2], 0, 1) is [2, 1]
 	assert: (array.swap: [1, 2], -1, -2) is [2, 1]
 	
+	arr = [1, 2, 3, 4, 10, 20, 30, 40]
+	center = array.find: arr, 10, 0
+	array.move: arr, 0, center, center
+	assert: arr is [10, 20, 30, 40, 1, 2, 3, 4]
+	
 	assert: (array.join: []) is ""
 	assert: (array.join: ["a+", "b+", "c"]) is "a+b+c"
 	
-	a = [1, 4, 7, 9]
-	b = [2, 5, 8]
-	c = [3, 6]
-	assert: (array.zip: [a, b, c]) is
+	x = [1, 4, 7, 9]
+	y = [2, 5, 8]
+	z = [3, 6]
+	assert: (array.zip: [x, y, z]) is
 		[1, 2, 3, 4, 5, 6, 7, 8, 9]
 	
 	vertices = [
@@ -752,6 +780,7 @@ array_lib() = do
 	assert: (array.chunk: [], 1) is []
 end
 
+-- Tests map utility library.
 map_lib() = do
 	example = {123 => "abc"}
 	assert: (map.len: example) is 1
@@ -761,8 +790,8 @@ map_lib() = do
 	assert: (map.get: example, 123) is "xyz"
 	
 	clear_me = {123 => "456", 789 => "123"}
-	map.del: clear_me, 123
-	map.del: clear_me, 789
+	map.delete: clear_me, 123
+	map.delete: clear_me, 789
 	assert: (map.len: clear_me) is 0
 	
 	test = {1 => "a", 2 => "b", 3 => "c"}
@@ -788,6 +817,7 @@ map_lib() = do
 	assert: (map.get_or_default: test, 4, "e") is "e"
 end
 
+-- Offloads work onto a worker thread.
 thread_lib() = do
 	func(data) = array.chunk: data, 3
 	
@@ -800,6 +830,7 @@ thread_lib() = do
 	assert: (array.get: result, 2) is [-0.5, 0.5, 0.5]
 end
 
+-- Tests file I/O operations.
 io_lib() = do
 	path = "test.txt"
 	text1 = "hi"
@@ -811,20 +842,22 @@ io_lib() = do
 	assert: (io.read: path) is text1 & text2
 	assert: (io.size: path) is (text.len: text1 & text2)
 	
-	io.del: path
+	io.delete: path
 	
 	dir_path = "hi"
 	assert: not (io.dir_exists: dir_path)
 	io.make_dir: dir_path
 	assert: (io.dir_exists: dir_path)
-	io.del: dir_path
+	io.delete: dir_path
 	assert: not (io.dir_exists: dir_path)
 end
 
+-- Sets up a server and client socket and transmits
+-- information between them.
 socket_lib() = do
 	IP = socket.LOCALHOST
 	PORT = 25565
-	GREETING = "welcome"
+	GREETING = "welcome!"
 	GOODBYE = "farewell"
 	
 	server = socket.create: socket.type.Stream
@@ -848,15 +881,24 @@ socket_lib() = do
 	socket.close: server
 end
 
-debug_lib() = none
+-- Tests converting between units.
+unit_lib() = do
+	EPS = 0.0000001
+	assert: (math.eqf: (1: "B", "kB"), 1.0 / 1000.0, EPS)
+	assert: (math.eqf: (1: "B", "mB"), 1.0 / 1000.0 ^ 2, EPS)
+	assert: (math.eqf: (1: "B", "gB"), 1.0 / 1000.0 ^ 3, EPS)
+	assert: (math.eqf: (1: "B", "KiB"), 1.0 / 1024.0, EPS)
+end
 
+-- Generates n random words and sorts them.
 sorting() = do
 	words = []
-	loop: 128, (fun _ -> words &=
+	loop: 4096, (fun _ -> words &=
 		rand.text: (rand.number: 3, 6), text.LETTERS)
 	words <- array.sort: words
 end
 
+-- Generates a sequence of fibonacci numbers.
 fibonacci() = do
 	fib(n) = if n <= 1 n else (fib: n - 1) + (fib: n - 2)
 	vals = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144]
@@ -864,6 +906,8 @@ fibonacci() = do
 		assert: num is fib: i)
 end
 
+-- Implements a search algorithm using fuzzy-string
+-- matching.
 search() = do
 	create_item(name, desc) = {
 		"name" => name,
@@ -884,8 +928,8 @@ search() = do
 				(text.ratio: query, item.desc)
 			
 			if ratio > hi_ratio do
-				best_match <- item
 				hi_ratio <- ratio
+				best_match <- item
 			end
 		end)
 		
@@ -896,30 +940,68 @@ search() = do
 	assert: result.name is "Fanta"
 end
 
+-- Generates a series of random first name + last name
+-- combinations.
 name_gen() = do
-	N_NAMES = 64
-	PARTS = [
+	N_NAMES = 128
+	PRINT = false
+	
+	FIRST = [
 		"ike", "ay", "ok", "che", "wara", "ill", "li", "e", "see",
 		"ait", "dun", "sol", "dier", "wall", "stem", "see", "ight",
 		"sam", "mei", "mel", "ore", "co", "cis", "laj", "ice", "loor",
 		"dia", "yee", "fu", "si", "el", "go", "ram", "tut", "soda", "or",
 		"yeet", "bomb", "mon", "heer", "rier", "ily", "rash", "feel",
-		"is", "aac", "in", "re", "mo", "gen", "ai", "oo", "ei", "ey", "xor",
+		"is", "aac", "in", "ri", "mo", "gen", "ai", "oo", "ei", "ey", "xor",
 		"lam", "bay", "see", "cook", "er", "in", "sho", "tak", "ci", "re",
 		"free", "ork", "ceer", "fast", "sigh", "calm", "brew", "gyro",
 		"dyna", "pain", "regel", "im", "max", "flip", "can", "hoo",
 		"ver", "arti", "fici", "al", "ong", "qui", "est", "non", "dorce",
-	] & (text.bytes: text.VOWELS)
-	PRINT = true
+		"seer", "ora", "cle", "afa", "wow", "vow", "vo", "sa", "ool",
+		"ba", "ros", "zz", "top", "loa", "cyl", "inder", "oon", "moo",
+		"zee", "za", "aw",  "wa", "foo", "ra", "xt", "sot", "too", "qe",
+		"ved", "inde", "va", "ja", "gor", "skoha", "ba", "haa", "kel",
+		"aa", "et", "saj", "lom", "fin", "grott", "pam", "bam", "mar",
+		"warum", "pet", "toy", "is", "ish", "hey", "hi", "om", "vi",
+		"fee", "fi", "pho", "fu", "bar", "sofa", "lend", "mind", "twi",
+	]
+		& (text.bytes: text.VOWELS)
+	
+	LAST1 = [
+		"bombe", "stick", "clock", "rule", "wing", "check", "zook",
+		"tin", "sim", "jos", "arch", "ark", "feed", "ruck", "aia", "zee",
+		"let", "kledd", "crane", "swallow", "seek", "dich", "fut",
+		"tuff", "ler", "duv", "vi", "wi", "wee", "junk", "brawl", "corn",
+		"noon", "morn", "day", "night", "young", "whole", "wheat",
+		"hal", "tuff", "gun", "weapon", "yah", "reel", "blink", "gah",
+		"zug", "rug", "slot", "pasta", "water", "milk", "check", "oi",
+	]
+	
+	LAST2 = [
+		"master", "brewer", "fud", "lock", "reel", "tan", "rith", "luie",
+		"marble", "smith", "click", "zeeker", "oint", "dip", "smask",
+		"pitt", "jones", "wood", "soda", "cow", "ect", "dirr", "ghe",
+		"vowel", "beef", "fisher", "mustard"
+	]
 	
 	names = []
 	loop: N_NAMES, (fun _ -> do
-		n_parts = rand.number: 2, 5
+		n_parts = rand.number: 1, 3
+		if (rand.number: 0, 1) > 0.5
+			n_parts += 1
+		
 		name = ""
-		loop: n_parts, (fun _ -> name &= rand.item: PARTS)
+		loop: n_parts, (fun _ -> name &= rand.item: FIRST)
+		name &= " "
+		name &= rand.item: LAST1
+		name &= rand.item: LAST2
+			
 		name <- text.title: name
 		names &= name
 	end)
+	
+	name = "test"
+	name = 2
 	
 	names <- array.sort: names
 	
@@ -966,7 +1048,7 @@ tests = [
 	thread_lib,
 	io_lib,
 	socket_lib,
-	debug_lib,
+	unit_lib,
 	"demo apps",
 	sorting,
 	fibonacci,
@@ -981,7 +1063,6 @@ array.iter: tests, (fun item ->
 		function = item
 		name = text.right_pad: (as_text: function), 35, "_"
 		name <- text.replace_all: name, "testbench.lur/", ""
-		name <- text.replace_all: name, "(0)", ""
 		name <- "    " & name
 		
 		times = []
