@@ -1,0 +1,1078 @@
+RUN_TIMES = 1
+
+-- Single and multi-line comments.
+comments() = do
+	-- single-line comment
+	
+	--[ 
+		multi-line
+		comment
+	--]
+end
+
+-- Name literals.
+names() = do
+	value = "whatever"
+	
+	name = value
+	Name = value
+	NAME = value
+	name_123 = value
+	Name_123 = value
+	NAME_123 = value
+	
+	assert: name is value
+	assert: Name is value
+	assert: NAME is value
+	assert: name_123 is value
+	assert: Name_123 is value
+	assert: NAME_123 is value
+end
+
+-- 'none' literal.
+none_literal() = do
+	none
+end
+
+-- 'true' and 'false'.
+bool_literal() = do
+	true
+	false
+end
+
+-- Numbers.
+number_literal() = do
+	whole = 3141592
+	decimal = 3.141592
+	
+	underscore = 1_000_000
+	assert: underscore is 1000000
+	
+	hexadecimal = 0xff
+	assert: hexadecimal is 255
+	
+	binary = 0b0101
+	assert: binary is 5
+end
+
+-- Text and escape sequences.
+text_literal() = do
+	empty = ""
+	
+	assert: "plain" is "plain"
+	assert: "\\" is "\x5c"
+	assert: "\"" is "\x22"
+	assert: "\t" is "\x09"
+	assert: "\n" is "\x0a"
+	assert: "\r" is "\x0d"
+	assert: "\0" is "\x00"
+	assert: "A" is "\x41"
+end
+
+-- Array literal.
+array_literal() = do
+	empty = []
+	numbers = [1, 4, 7]
+	trailing_comma = [
+		1, 2, 3,
+	]
+end
+
+-- Map literal.
+map_literal() = do
+	empty = {}
+	config = {
+		"video" =>  {
+			"resx" => 1920,
+			"resy" => 1080,
+			"fullscreen" => 1,
+			"vsync" => false,
+			"preset" => "ultra",
+			"materials" => 4,
+			"shaders" => 4,
+			"lights" => 4,
+			"lod" => 4,
+			"fog" => 4,
+		},
+		"binds" => {
+			"+forward" => "w",
+			"-forward" => "s",
+			"+right" => "d",
+			"-right" => "a",
+			"jump" => "space",
+			"sneak" => "lctrl",
+			"sprint" => "lshift",
+			"interact" => "e",
+			"kick" => "g",
+		},
+		"mouse" => {
+			"sensx" => 0.8,
+			"sensy" => 0.8,
+			"invert_y" => false,
+		},
+		"player" => {
+			"yaw" => 89.065,
+			"pitch" => -40.625,
+			"inventory" => {
+				"slot1" => none,
+				"slot2" => none,
+				"slot3" => none,
+				"slot4" => none,
+				"slot5" => none,
+				"slot6" => none,
+				"slot7" => none,
+				"slot8" => none,
+				"slot9" => none,
+			},
+			"selected_slot" => "slot1",
+			"health" => 100,
+		},
+		"game" => {
+			"world" => "world1",
+			"time_of_day" => 3652.598,
+		},
+	}
+	trailing_comma = {
+		1 => "a", 2 => "b", 3 => "c",
+	}
+end
+
+-- Function literal.
+function_literal() = do
+	normal() = do end
+	no_block() = none
+	args(a1, a2, a3) = a1 & a2 & a3
+	lambda = fun -> none
+	lambda_args = (fun a1, a2, a3 -> a1 & a2 & a3)
+end
+
+-- Value equality.
+equality() = do
+	values = []
+	map.iter: type, (fun _, type -> values &= default: type)
+	
+	array.iteri: values, (fun skip, value -> do
+		assert: value is value
+		array.iteri: values, (fun i, other -> if i != skip
+			assert: value != other)
+	end)
+	
+	fun1(a, b) = a + b
+	fun2(x, y) = x + y
+	assert: fun1 is fun2
+end
+
+-- Numeric comparison.
+comparison() = do
+	lo = -100
+	hi = 100
+	same = 75
+	assert: lo < hi
+	assert: lo <= hi
+	assert: lo <= lo
+	assert: hi > lo
+	assert: hi >= lo
+	assert: hi >= hi
+	assert: same >= same
+	assert: same <= same
+end
+
+-- Boolean operators ('and', 'or' and 'not').
+boolean_ops() = do
+	assert: true and true is true
+	assert: true and false is false
+	assert: true or false is true
+	assert: false or false is false
+	
+	crash() = assert: false
+	false and crash;
+	true or crash;
+	
+	assert: not true is false
+	assert: not false is true
+end
+
+-- Single-value math.
+scalar_math() = do
+	assert: 1 + 2 is 3
+	assert: 8 - 5 is 3
+	assert: 4 * 2 is 8
+	assert: 2 ^ 8 is 256
+	assert: 16 / 2 is 8
+	assert: 16 % 14 is 2
+	assert: -1 is 0 - 1
+	assert: 1 + 3 - 5 * 7 / 8 - -10 is 9.625
+end
+
+-- Multi-value math.
+vector_math() = do
+	assert: [1, 2, 3] + 10 is [11, 12, 13]
+	assert: [1, 2, 3] + [9, 8, 7] is [10, 10, 10]
+	
+	assert: [1, 2, 3] - 2 is [-1, 0, 1]
+	assert: [1, 2, 3] - [1, 2, 3] is [0, 0, 0]
+
+	assert: [1, 2, 3] * 10 is [10, 20, 30]
+	assert: [1, 2, 3] * [10, 100, 1000] is
+		[10, 200, 3000]
+	
+	assert: [1, 2, 3] ^ 2 is [1, 4, 9]
+	assert: [1, 2, 3] ^ [4, 5, 6] is [1, 32, 729]
+	
+	assert: [1, 2, 3] / 2 is [0.5, 1, 1.5]
+	assert: [1, 2, 3] / [0.5, 0.5, 0.5] is [2, 4, 6]
+	
+	assert: [1, 2, 3] % 2 is [1, 0, 1]
+	assert: [1, 2, 3] % [0.75, 1.5, 2.25] is
+		[0.25, 0.5, 0.75]
+		
+	v = [1, 2, 3, 4]
+	assert: v.x is 1
+	assert: v.y is 2
+	assert: v.z is 3
+	assert: v.w is 4
+	
+	v.x <- 5
+	v.y <- 6
+	v.z <- 7
+	v.w <- 8
+	
+	assert: v.x is 5
+	assert: v.y is 6
+	assert: v.z is 7
+	assert: v.w is 8
+end
+
+-- Negate operator.
+invert() = do
+	assert: -1 is 0 - 1
+	assert: -"hello" is "olleh"
+	assert: -[1, 2, 3] is [3, 2, 1]
+	assert: -{1 => "a"} is {"a" => 1}
+end
+
+-- Assign operator + compound assignment.
+assign() = do
+	x = 0
+	
+	x <- 4
+	assert: x is 4
+	x += 1
+	assert: x is 5
+	x -= 2
+	assert: x is 3
+	x *= 10
+	assert: x is 30
+	x ^= 2
+	assert: x is 900
+	x /= 4
+	assert: x is 225
+	x %= 200
+	assert: x is 25
+	
+	obj = {"x" => 0}
+	obj.x <- 4
+	assert: obj.x is 4
+	obj.x += 1
+	assert: obj.x is 5
+	obj.x -= 2
+	assert: obj.x is 3
+	obj.x *= 10
+	assert: obj.x is 30
+	obj.x ^= 2
+	assert: obj.x is 900
+	obj.x /= 4
+	assert: obj.x is 225
+	obj.x %= 200
+	assert: obj.x is 25
+	
+	chain1 = 0
+	chain2 = 0
+	chain3 = 0
+	chain1 <- chain2 <- chain3 <- 7.5
+	assert: chain1 is 7.5
+	assert: chain2 is 7.5
+	assert: chain3 is 7.5
+end
+
+-- Concatenation operator.
+concat() = do
+	assert: "Hello " & "World" is "Hello World"
+	assert: [1, 2] & 3 is [1, 2, 3]
+	assert: 1 & [2, 3] is [1, 2, 3]
+	assert: [1, 2] & [3] is [1, 2, 3]
+	assert: [1] & [2, 3] is [1, 2, 3]
+	assert: {1 => "a"} & {2 => "b"} is {1 => "a", 2 => "b"}
+end
+
+-- do...end blocks.
+blocks() = do
+	empty = do end
+	assert: empty is none
+	
+	value = do 1 end
+	assert: value is 1
+	
+	variable = do
+		x = 5
+		x
+	end
+	assert: variable is 5
+end
+
+-- Tests functions.
+functions() = do
+	empty() = do end
+	assert: (empty;) is none
+	
+	one() = 1
+	assert: (one;) is 1
+	
+	rec(i) = if i < 3 rec: i + 1 else i
+	assert: (rec: 0) is 3
+	
+	early_return() = do
+		local = 3
+		if true return 1
+		2
+	end
+	assert: (early_return;) is 1
+
+	value = 1
+	a() = do
+		assert: value is 1
+		value <- 2
+	end
+	a;
+	assert: value is 2
+	
+	a() = do
+		value = 1
+		b() = do
+			value <- 2
+		end
+		b;
+		value
+	end
+	assert: (a;) is 2
+	
+	a() = do
+		value = 3
+		value
+	end
+	assert: (a;) is 3
+end
+
+-- Tests the dot operator.
+dot_operator() = do
+	test = {"abc" => 123}
+	assert: test.abc is 123
+	test.abc <- 456
+	assert: test.abc is 456
+end
+
+-- Tests the arrow operator.
+arrow_operator() = do
+	map = {
+		"xyz" => 456,
+		"abc" => (fun self -> assert: self.xyz is 456),
+		"rst" => (fun self, x, y -> assert: x + y is 5),
+	}
+	map->abc()
+	map->rst(2, 3)
+end
+
+-- Tests if/else branches.
+branches() = do
+	value = if 1 is 1 "A" else "B"
+	assert: value is "A"
+	
+	value <- if 1 is 0 "A" else "B"
+	assert: value is "B"
+	
+	value <- if 1 is 0 "A"
+	assert: value is none
+	
+	value <- if 1 is 2 "A"
+		else if 1 is 1 "B"
+		else if 1 is 0 "C"
+	assert: value is "B"
+end
+
+-- Tests base/prelude library.
+base_lib() = do
+	assert: (type_of: none) is type.None
+	assert: (type_of: true) is type.Bool
+	assert: (type_of: 333) is type.Number
+	assert: (type_of: "hey") is type.Text
+	assert: (type_of: ["hi"]) is type.Array
+	assert: (type_of: {"a" => "b"}) is type.Map
+	assert: (type_of: math.min) is type.Function
+	assert: (type_of: (fun a, b -> a + b)) is type.Function
+		
+	assert: (default: type.None) is none
+	assert: (default: type.Bool) is false
+	assert: (default: type.Number) is 0
+	assert: (default: type.Text) is ""
+	assert: (default: type.Array) is []
+	assert: (default: type.Map) is {}
+	assert: (default: type.Function) is (fun -> none)
+	
+	values = [
+		none,
+		false,
+		333,
+		"text",
+		["list"],
+		{1 => "map"},
+		(fun a, b -> a + b),
+		(fun -> array.iter: values, io.print),
+		math.max,
+	]
+	
+	array.iter: values, (fun item -> do
+		data = serialize: item
+		recreated = deserialize: data
+		assert: item is recreated
+	end)
+	
+	assert: (as_number: none) is 0
+	assert: (as_number: false) is 0
+	assert: (as_number: true) is 1
+	assert: (as_number: "5") is 5
+	assert: (as_number: "$") is 0
+	assert: (as_number: [1, "23"]) is 123
+	
+	assert: (as_text: none) is "none"
+	assert: (as_text: true) is "true"
+	assert: (as_text: false) is "false"
+	assert: (as_text: 333) is "333"
+	assert: (as_text: "hey") is "hey"
+	assert: (as_text: ["hi"]) is "[\"hi\"]"
+	assert: (as_text: {"a" => "b"}) is "{\"a\" => \"b\"}"
+	assert: (as_text: io.print) is "print"
+	assert: (as_text: fun a, b -> a + b) is
+		"testbench.lur/base_lib/?"
+	
+	nums = []
+	loop: 3, (fun i -> nums &= i)
+	assert: nums is [0, 1, 2]
+	
+	nums = []
+	index = 0
+	while: (fun -> do
+		nums &= index
+		index += 1
+		
+		index < 3
+	end)
+	assert: nums is [0, 1, 2]
+
+	assert: (range: 0, 3) is [0, 1, 2]
+	assert: (range: 0, -3) is [0, -1, -2]
+	assert: (range_inc: 0, 3) is [0, 1, 2, 3]
+	assert: (range_inc: 0, -3) is [0, -1, -2, -3]
+	
+	day = enum: [
+		"Monday",
+		"Tuesday",
+		"Wednesday",
+		"Thursday",
+		"Friday",
+		"Saturday", 
+		"Sunday",
+	]
+	assert: day.Monday is 0
+	assert: day.Tuesday is 1
+	assert: day.Wednesday is 2
+	assert: day.Thursday is 3
+	assert: day.Friday is 4
+	assert: day.Saturday is 5
+	assert: day.Sunday is 6
+end
+
+-- Tests memory library.
+mem_lib() = do
+	a = [1, 2, 3]
+	b = [1, 2, 3]
+	assert: (mem.addr: a) != (mem.addr: b)
+	
+	txt = "Hello, world!"
+	txt_copy = mem.copy: txt
+	assert: txt is txt_copy and
+		(mem.addr: txt) != (mem.addr: txt_copy)
+		
+	arr = [1, 2, 3]
+	arr_copy = mem.copy: arr
+	assert: arr is arr_copy and
+		(mem.addr: arr) != (mem.addr: arr_copy)
+		
+	mp = {1 => 2}
+	mp_copy = mem.copy: mp
+	assert: mp is mp_copy and
+		(mem.addr: mp) != (mem.addr: mp_copy)
+		
+	func = fun a, b -> a + b
+	func_copy = mem.copy: func
+	assert: func is func_copy and
+		(mem.addr: func) != (mem.addr: func_copy)
+		
+	nested = [[1, 2, 3], {1 => 2}]
+	copy = mem.deep_copy: nested
+	assert: (mem.addr: (array.get: nested, 0)) !=
+		(mem.addr: (array.get: copy, 0))
+	assert: (mem.addr: (array.get: nested, 1)) !=
+		(mem.addr: (array.get: copy, 1))
+end
+
+-- Tests system library.
+system_lib() = do
+	assert: system.VERSION is "lur 1.0"
+end
+
+-- Tests math library.
+math_lib() = do
+	assert: (math.eqf: math.PI,
+		3.14159265358979323846264338327950288,
+		0.00001)
+	assert: (math.eqf: math.E,
+		2.71828182845904523536028747135266250,
+		0.00001)
+	assert: (math.bit_shl: 16, 8) is 4096
+	assert: (math.bit_shr: 4096, 8) is 16
+	assert: (math.bit_and: 24, 22) is 16
+	assert: (math.bit_or: 23, 48) is 55
+	assert: (math.bit_xor: 40, 41) is 1
+	assert: (math.bit_not: 60) is -61
+	assert: (math.log: 64, 8) is 2
+	assert: (math.sqrt: 4) is 2 and
+		(math.squared: 2) is 4
+	assert: (math.abs: -1) is 1 and (math.abs: 1) is 1
+	assert: (math.min: 4, 5) is 4
+	assert: (math.max: 4, 5) is 5
+	assert: (math.clip: 3, 4, 5) is 4
+	assert: (math.clip: 6, 4, 5) is 5
+	assert: (math.clip: 4.5, 4, 5) is 4.5
+	assert: (math.lerp: 0.25, -10, 10) is -5
+	assert: (math.lerp: 0.5, -10, 10) is 0
+	assert: (math.lerp: 0.75, -10, 10) is 5
+	assert: (math.interp_to: 1, 2, 3, 1) is 4
+	assert: (math.floor: 3.9) is 3
+	assert: (math.ceil: 2.9) is 3
+	assert: (math.round: 3.45) is 3
+	assert: (math.round: 3.55) is 4
+	assert: (math.round: 3.5) is 4
+	assert: (math.eqf: (math.rad: 45), 0.7853, 0.001)
+	assert: (math.eqf: (math.deg: 1), 57.2957, 0.001)
+	assert: (math.eqf: (math.sin: 30), -0.988, 0.001)
+	assert: (math.eqf: (math.cos: 30), 0.1542, 0.001)
+	assert: (math.eqf: (math.tan: 30), -6.405, 0.001)
+	assert: (math.eqf: (math.asin: 1), 1.5707, 0.001)
+	assert: (math.eqf: (math.acos: 1), 0, 0.001)
+	assert: (math.eqf: (math.atan: 1), 0.7853, 0.001)
+	assert: 
+		(math.eqf: (math.atan2: 3, 4), 0.6435, 0.001)
+	assert: (math.eqf: (math.sinh: 1), 1.1752, 0.001)
+	assert: (math.eqf: (math.cosh: 1), 1.5430, 0.001)
+	assert: (math.eqf: (math.tanh: 1), 0.7615, 0.001)
+	assert: 
+		(math.eqf: (math.asinh: 10), 2.9982, 0.001)
+	assert: 
+		(math.eqf: (math.acosh: 10), 2.9932, 0.001)
+	assert: 
+		(math.eqf: (math.atanh: 0.5), 0.5493, 0.001)
+	assert: (math.is_even: 2) and not
+		(math.is_even: 3)
+	assert: (math.is_odd: 3) and not (math.is_odd: 2)
+	assert: (math.is_prime: 7) and not
+		(math.is_prime: 6)
+	assert: (math.hex: 0xff) is "0xff"
+	assert: (math.bin: 0b11) is "0b11"
+	assert: (math.hex: (math.hash: ["Hello", "XYZ"])) is
+		"0x8380b4fa"
+end
+
+-- Tests vector library.
+vec_lib() = do
+	assert: (vec.size: [3, 0, 0]) is 3
+	assert: (vec.norm: [3, 0, 0]) is [1, 0, 0]
+	
+	v1 = [-1, 0, 0]
+	v2 = [0.8, 0, 0]
+	assert: (math.eqf: (vec.dot: v1, v2), -0.8, 0.001)
+	
+	v1 = [3, 5, 4]
+	v2 = [2, 7, 5]
+	assert: (vec.cross: v1, v2) is [-3, -7, 11]
+end
+
+-- Tests random library.
+rand_lib() = do
+	rand.seed: 45678
+	assert: (math.floor: (rand.number: 1, 10)) is 5
+	assert: (rand.text: 10, "") is ""
+	assert: (rand.text: 5, text.LETTERS) is "yvjou"
+	assert: (rand.item: []) is none
+	assert: (rand.item: [1, 2, 3]) is 1
+end
+
+-- Tests text library functions.
+text_lib() = do
+	assert: text.LETTERS is
+		"abcdefghijklmnopqrstuvwxyz"
+	assert: text.DIGITS is "0123456789"
+	assert: text.PUNCTUATION is
+		"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+	assert: text.WHITESPACE is " \t\n\r"
+	assert: (text.len: "three") is 5
+	assert: (text.bytes: "abc") is ["a", "b", "c"]
+	assert: (text.ascii: "abc") is [97, 98, 99]
+	assert: (text.words: "", " ") is []
+	assert: (text.words: "abc 123", " ") is ["abc", "123"]
+	assert: (text.words: "abc  123", " ") is ["abc", "123"]
+	assert: (text.words: " abc 123 ", " ") is ["abc", "123"]
+	assert: (text.slice: "accident", 3, 5) is "id"
+	assert: (text.slice: "accident", -5, -3) is "id"
+	assert: (text.repeat: "data", 3) is "datadatadata"
+	assert: (text.as_upper: "hi") is "HI"
+	assert: (text.as_lower: "HI") is "hi"
+	assert: (text.is_upper: "A") and not
+		(text.is_upper: "a")
+	assert: (text.is_lower: "a") and not
+		(text.is_lower: "A")
+	assert: (text.starts_with: "123", "1")
+	assert: (text.ends_with: "123", "3")
+	assert: (text.trim_left: " hi") is "hi"
+	assert: (text.trim_right: "hi ") is "hi"
+	assert: (text.trim: " hi ") is "hi"
+	assert: (text.left_pad: "456", 6, "%") is "%%%456"
+	assert: (text.right_pad: "327", 6 ,"") is "327"
+	assert: (text.pad: "48", 6, ".") is "..48.."
+	assert: (text.find: "silver gold", "gold", 0) is 7
+	assert: (text.replace_all:
+		"silver gold silver", "silver", "bronze") is
+		"bronze gold bronze"
+	assert: (text.edit_dist: "golden", "ffolden") is 2
+	assert: (math.eqf: (text.ratio: "tex", "yes"), 0.6666, 0.001)
+end
+
+-- Tests array utility library.
+array_lib() = do
+	ls = [1, 2]
+	assert: (array.len: ls) is 2
+	
+	assert: (array.get: ls, 0) is 1
+	assert: (array.get: ls, -1) is 2
+	array.set: ls, 0, 3 
+	array.set: ls, -1, 4
+	assert: (array.get: ls, 0) is 3
+	assert: (array.get: ls, -1) is 4
+	
+	empty = []
+	array.insert: empty, 0, 1
+	assert: empty is [1]
+	
+	ls = [1, 3]
+	
+	array.insert: ls, 1, 2
+	array.insert: ls, -1, 4
+	assert: ls is [1, 2, 3, 4]
+	
+	array.delete: ls, 0
+	array.delete: ls, -1
+	assert: ls is [2, 3]
+	
+	value = array.pop: ls
+	assert: value is 3 and ls is [2]
+	
+	x = [1, 2, 3, 4, 5]
+	assert: (array.head: x) is 1
+	assert: (array.tail: x) is [2, 3, 4, 5]
+	assert: (array.last: x) is 5
+	
+	init = array.fill: 4, (fun _ -> 5)
+	assert: init is [5, 5, 5, 5]
+	
+	init2 = array.fill: 4, (fun i -> i + 1)
+	assert: init2 is [1, 2, 3, 4]
+	
+	rep = array.repeat: [0, 1], 4
+	assert: rep is [0, 1, 0, 1, 0, 1, 0, 1]
+	
+	rot = [1, 2, 3]
+	assert: (array.rotate: rot, -1) is [2, 3, 1]
+	assert: (array.rotate: rot, 1) is [3, 1, 2]
+	
+	assert: (array.count: [0, 1, 1, 0, 1, 1, 0, 0], 1) is 4
+	
+	ls = [1, 2]
+	assert: array.contains: ls, 1
+	assert: not array.contains: ls, 3
+	
+	assert: (array.find: [1, 2, 3], 2, 0) is 1
+	assert: (array.find: [1, 2, 3], 2, 2) is none
+	
+	nums = [1, 2, 3]
+	total = 0
+	array.iter: nums, (fun num -> total += num)
+	assert: total is 6
+	
+	inds = [0, 1, 2]
+	nums = [1, 2, 3]
+	array.iteri: nums, (fun i, num -> do
+		assert: i is num - 1
+		assert: (array.get: nums, i) is num
+		assert: (array.get: inds, i) is i
+	end)
+	
+	assert: (array.map: [1, 2, 3], math.squared) is [1, 4, 9]
+	assert: (array.filter: [1, 2, 3], math.is_even) is [2]
+	assert: (array.fold: [1, 2, 3], 1, (fun a, b -> a + b)) is 7
+	assert: (array.flat: [1, [2], [3, [4]]]) is [1, 2, 3, 4]
+	assert: (array.dedup: [1, 1, 1, 0]) is [1, 0]
+	assert: (array.sum: [1, 2, 3]) is 6
+	assert: (array.average: [1, 2, 3]) is 2
+	
+	a = [10, 2, 30]
+	assert: (array.median: a) is 2
+	
+	b = [10, 2, 3, 40]
+	assert: (array.median: b) is (2 + 3) / 2
+	
+	assert: array.any: [4, 5, 6], (fun x -> x > 5)
+	assert: not array.any: [4, 5, 6], (fun x -> x > 6)
+	assert: array.all: [1, 1, 1], (fun x -> x is 1)
+	assert: not array.all: [1, 0, 1], (fun x -> x is 1)
+	
+	assert: (array.sort: []) is []
+	assert: (array.sort: [1]) is [1]
+	assert: (array.sort: [3, 2, 1]) is [1, 2, 3]
+	assert: (array.sort: ["James", "Aqua"]) is 
+		["Aqua", "James"]
+	
+	assert: (array.swap: [1, 2], 0, 1) is [2, 1]
+	assert: (array.swap: [1, 2], -1, -2) is [2, 1]
+	
+	arr = [1, 2, 3, 4, 10, 20, 30, 40]
+	center = array.find: arr, 10, 0
+	array.move: arr, 0, center, center
+	assert: arr is [10, 20, 30, 40, 1, 2, 3, 4]
+	
+	assert: (array.join: []) is ""
+	assert: (array.join: ["a+", "b+", "c"]) is "a+b+c"
+	
+	x = [1, 4, 7, 9]
+	y = [2, 5, 8]
+	z = [3, 6]
+	assert: (array.zip: [x, y, z]) is
+		[1, 2, 3, 4, 5, 6, 7, 8, 9]
+	
+	vertices = [
+		-0.5, 0.5, 0.0,
+		0.5, 0.5, 0.0,
+		-0.5, -0.5, 0.0
+	]
+	
+	chunks = array.chunk: vertices, 3
+	assert: (array.get: chunks, 0) is [-0.5, 0.5, 0.0]
+	assert: (array.get: chunks, 1) is [0.5, 0.5, 0.0]
+	assert: (array.get: chunks, 2) is [-0.5, -0.5, 0.0]
+	assert: (array.chunk: [], 1) is []
+end
+
+-- Tests map utility library.
+map_lib() = do
+	example = {123 => "abc"}
+	assert: (map.len: example) is 1
+	
+	assert: (map.get: example, 123) is "abc"
+	map.set: example, 123, "xyz"
+	assert: (map.get: example, 123) is "xyz"
+	
+	clear_me = {123 => "456", 789 => "123"}
+	map.delete: clear_me, 123
+	map.delete: clear_me, 789
+	assert: (map.len: clear_me) is 0
+	
+	test = {1 => "a", 2 => "b", 3 => "c"}
+	assert: (map.has_key: test, 1)
+	assert: (map.has_value: test, "a")
+	assert: (map.keys: test) is [1, 2, 3]
+	assert: (map.values: test) is ["a", "b", "c"]
+	
+	pairs = [[1, "a"], [2, "b"], [3, "c"]]
+	assert: (map.kv_pairs: test) is pairs
+	assert: (map.from_kv_pairs: pairs) is test
+	
+	pairs = []
+	map.iter: test, (fun k, v -> pairs &= [[k, v]])
+	assert: pairs is [[1, "a"], [2, "b"], [3, "c"]]
+	
+	elem = {1 => "a", 2 => "b", 3 => "c"}
+	ipairs = []
+	map.iteri: elem, (fun i, k, v -> ipairs &= [[i, k, v]])
+	assert: ipairs is [[0, 1, "a"], [1, 2, "b"], [2, 3, "c"]]
+	
+	assert: (map.get_or_default: test, 1, "d") is "a"
+	assert: (map.get_or_default: test, 4, "e") is "e"
+end
+
+-- Offloads work onto a worker thread.
+thread_lib() = do
+	func(data) = array.chunk: data, 3
+	
+	data = array.fill: 9, (fun _ -> rand.item: [-0.5, 0, 0.5])
+	id = thread.spawn: func, [data]
+	
+	result = thread.join: id
+	assert: (array.get: result, 0) is [-0.5, 0, 0.5]
+	assert: (array.get: result, 1) is [-0.5, 0, 0.5]
+	assert: (array.get: result, 2) is [-0.5, 0.5, 0.5]
+end
+
+-- Tests file I/O operations.
+io_lib() = do
+	path = "test.txt"
+	text1 = "hi"
+	text2 = "\n123"
+	io.write: path, text1
+	assert: (io.read: path) is text1
+	
+	io.append: path, text2
+	assert: (io.read: path) is text1 & text2
+	assert: (io.size: path) is (text.len: text1 & text2)
+	
+	io.delete: path
+	
+	dir_path = "hi"
+	assert: not (io.dir_exists: dir_path)
+	io.make_dir: dir_path
+	assert: (io.dir_exists: dir_path)
+	io.delete: dir_path
+	assert: not (io.dir_exists: dir_path)
+end
+
+-- Sets up a server and client socket and transmits
+-- information between them.
+socket_lib() = do
+	IP = socket.LOCALHOST
+	PORT = 25565
+	GREETING = "welcome!"
+	GOODBYE = "farewell"
+	
+	server = socket.create: socket.type.Stream
+	socket.bind: server, IP, PORT
+	socket.listen: server, 5
+	
+	client = socket.create: socket.type.Stream
+	socket.connect: client, IP, PORT
+	
+	sv_client = socket.accept: server
+	
+	socket.send: sv_client, GREETING
+	msg = socket.recv: client
+	assert: msg is GREETING
+	
+	socket.send: client, GOODBYE
+	msg = socket.recv: sv_client
+	assert: msg is GOODBYE
+	
+	socket.close: client
+	socket.close: server
+end
+
+-- Tests converting between units.
+unit_lib() = do
+	EPS = 0.0000001
+	assert: (math.eqf: (1: "B", "kB"), 1.0 / 1000.0, EPS)
+	assert: (math.eqf: (1: "B", "mB"), 1.0 / 1000.0 ^ 2, EPS)
+	assert: (math.eqf: (1: "B", "gB"), 1.0 / 1000.0 ^ 3, EPS)
+	assert: (math.eqf: (1: "B", "KiB"), 1.0 / 1024.0, EPS)
+end
+
+-- Generates n random words and sorts them.
+sorting() = do
+	words = []
+	loop: 4096, (fun _ -> words &=
+		rand.text: (rand.number: 3, 6), text.LETTERS)
+	words <- array.sort: words
+end
+
+-- Generates a sequence of fibonacci numbers.
+fibonacci() = do
+	fib(n) = if n <= 1 n else (fib: n - 1) + (fib: n - 2)
+	vals = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144]
+	array.iteri: vals, (fun i, num ->
+		assert: num is fib: i)
+end
+
+-- Implements a search algorithm using fuzzy-string
+-- matching.
+search() = do
+	create_item(name, desc) = {
+		"name" => name,
+		"desc" => desc,
+	}
+	
+	db = []
+	db &= create_item: "Coca-Cola", "a soft fizzeh drink"
+	db &= create_item: "Sprite", "sugar lime"
+	db &= create_item: "Fanta", "an orange drink"
+	
+	search(query) = do
+		best_match = none
+		hi_ratio = 0
+		
+		array.iter: db, (fun item -> do
+			ratio = (text.ratio: query, item.name) +
+				(text.ratio: query, item.desc)
+			
+			if ratio > hi_ratio do
+				hi_ratio <- ratio
+				best_match <- item
+			end
+		end)
+		
+		best_match
+	end
+	
+	result = search: "Panta"
+	assert: result.name is "Fanta"
+end
+
+-- Generates a series of random first name + last name
+-- combinations.
+name_gen() = do
+	N_NAMES = 128
+	PRINT = false
+	
+	FIRST = [
+		"ike", "ay", "ok", "che", "wara", "ill", "li", "e", "see",
+		"ait", "dun", "sol", "dier", "wall", "stem", "see", "ight",
+		"sam", "mei", "mel", "ore", "co", "cis", "laj", "ice", "loor",
+		"dia", "yee", "fu", "si", "el", "go", "ram", "tut", "soda", "or",
+		"yeet", "bomb", "mon", "heer", "rier", "ily", "rash", "feel",
+		"is", "aac", "in", "ri", "mo", "gen", "ai", "oo", "ei", "ey", "xor",
+		"lam", "bay", "see", "cook", "er", "in", "sho", "tak", "ci", "re",
+		"free", "ork", "ceer", "fast", "sigh", "calm", "brew", "gyro",
+		"dyna", "pain", "regel", "im", "max", "flip", "can", "hoo",
+		"ver", "arti", "fici", "al", "ong", "qui", "est", "non", "dorce",
+		"seer", "ora", "cle", "afa", "wow", "vow", "vo", "sa", "ool",
+		"ba", "ros", "zz", "top", "loa", "cyl", "inder", "oon", "moo",
+		"zee", "za", "aw",  "wa", "foo", "ra", "xt", "sot", "too", "qe",
+		"ved", "inde", "va", "ja", "gor", "skoha", "ba", "haa", "kel",
+		"aa", "et", "saj", "lom", "fin", "grott", "pam", "bam", "mar",
+		"warum", "pet", "toy", "is", "ish", "hey", "hi", "om", "vi",
+		"fee", "fi", "pho", "fu", "bar", "sofa", "lend", "mind", "twi",
+	]
+		& (text.bytes: text.VOWELS)
+	
+	LAST1 = [
+		"bombe", "stick", "clock", "rule", "wing", "check", "zook",
+		"tin", "sim", "jos", "arch", "ark", "feed", "ruck", "aia", "zee",
+		"let", "kledd", "crane", "swallow", "seek", "dich", "fut",
+		"tuff", "ler", "duv", "vi", "wi", "wee", "junk", "brawl", "corn",
+		"noon", "morn", "day", "night", "young", "whole", "wheat",
+		"hal", "tuff", "gun", "weapon", "yah", "reel", "blink", "gah",
+		"zug", "rug", "slot", "pasta", "water", "milk", "check", "oi",
+	]
+	
+	LAST2 = [
+		"master", "brewer", "fud", "lock", "reel", "tan", "rith", "luie",
+		"marble", "smith", "click", "zeeker", "oint", "dip", "smask",
+		"pitt", "jones", "wood", "soda", "cow", "ect", "dirr", "ghe",
+		"vowel", "beef", "fisher", "mustard"
+	]
+	
+	names = []
+	loop: N_NAMES, (fun _ -> do
+		n_parts = rand.number: 1, 3
+		if (rand.number: 0, 1) > 0.5
+			n_parts += 1
+		
+		name = ""
+		loop: n_parts, (fun _ -> name &= rand.item: FIRST)
+		name &= " "
+		name &= rand.item: LAST1
+		name &= rand.item: LAST2
+			
+		name <- text.title: name
+		names &= name
+	end)
+	
+	name = "test"
+	name = 2
+	
+	names <- array.sort: names
+	
+	if PRINT
+		array.iter: names, io.print
+end
+
+tests = [
+	"parser",
+	comments,
+	names,
+	none_literal,
+	bool_literal,
+	number_literal,
+	text_literal,
+	array_literal,
+	map_literal,
+	function_literal,
+	"operators",
+	equality,
+	comparison,
+	boolean_ops,
+	scalar_math,
+	vector_math,
+	invert,
+	assign,
+	concat,
+	"constructs",
+	blocks,
+	functions,
+	dot_operator,
+	arrow_operator,
+	branches,
+	"standard library",
+	base_lib,
+	mem_lib,
+	system_lib,
+	math_lib,
+	vec_lib,
+	rand_lib,
+	text_lib,
+	array_lib,
+	map_lib,
+	thread_lib,
+	io_lib,
+	socket_lib,
+	unit_lib,
+	"demo apps",
+	sorting,
+	fibonacci,
+	search,
+	name_gen,
+]
+
+io.print: "n=" & RUN_TIMES
+start = time.clock;
+array.iter: tests, (fun item ->
+	if (type_of: item) is type.Function do
+		function = item
+		name = text.right_pad: (as_text: function), 35, "_"
+		name <- text.replace_all: name, "testbench.lur/", ""
+		name <- "    " & name
+		
+		times = []
+		loop: RUN_TIMES, (fun _ -> do
+			start = time.clock;
+			function;
+			times &= time.clock; - start
+		end)
+	
+		took = array.sum: times
+		io.print: name & "took " & took & "s"
+	end else io.print: item)
+io.print: "success! took " & (time.clock; - start) & "s"
