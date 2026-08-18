@@ -19,30 +19,30 @@
 #include <unistd.h>
 #include <errno.h>
 
-#define LUR_VERSION "lur 1.0"
-#define LUR_VERSION_MAJ 1
-#define LUR_VERSION_MIN 0
-#define LUR_VERSION_PATCH 0
+#define GLUON_VERSION "gluon 1.0"
+#define GLUON_VERSION_MAJ 1
+#define GLUON_VERSION_MIN 0
+#define GLUON_VERSION_PATCH 0
 
-#define LUR_REPL_GREETING \
+#define GLUON_REPL_GREETING \
 	"use help: \"all\" to view the documentation."
 
-#define LUR_DEBUG_ASSERTS 1
-#define LUR_DEBUG_PRINT_CODE 0
-#define LUR_DEBUG_PRINT_DATA 0
-#define LUR_DEBUG_PRINT_STACK 0
-#define LUR_DEBUG_PRINT_TOKENS 0
-#define LUR_DEBUG_PRINT_ALLOCS 0
-#define LUR_DEBUG_PRINT_MEM_STATS 1
-#define LUR_DEBUG_DISABLE_GC 0
+#define GLUON_DEBUG_ASSERTS 1
+#define GLUON_DEBUG_PRINT_CODE 0
+#define GLUON_DEBUG_PRINT_DATA 0
+#define GLUON_DEBUG_PRINT_STACK 0
+#define GLUON_DEBUG_PRINT_TOKENS 0
+#define GLUON_DEBUG_PRINT_ALLOCS 0
+#define GLUON_DEBUG_PRINT_MEM_STATS 1
+#define GLUON_DEBUG_DISABLE_GC 0
 
-#define lur_printf printf
-#define lur_eprintf printf
-#define lur_dprintf printf
+#define gluon_printf printf
+#define gluon_eprintf printf
+#define gluon_dprintf printf
 
-#define lur_realloc realloc
-#define lur_gc_realloc realloc
-#define lur_gc_free free
+#define gluon_realloc realloc
+#define gluon_gc_realloc realloc
+#define gluon_gc_free free
 
 #define INIT_ARRAY_CAP 8
 #define MAP_MAX_LOAD 0.75
@@ -116,6 +116,10 @@
 		(fname)->buffer, \
 		(got), ((got) == 1) ? "" : "s", \
 		(wanted)
+#define ERR_ASSIGN_SWIZZLE \
+	"duplicate value in assignment swizzle"
+#define ERR_SWIZZLE_CHAR(ch) \
+	"invalid character in swizzle: '%c'", (ch)
 #define ERR_NOT_IMPLEMENTED(what) \
 	"%s not implemented", (what)
 #define ERR_DIV_BY_ZERO \
@@ -154,14 +158,14 @@
 #define ERR_UNITS_INCOMPATIBLE(from, to) \
 	"units incompatible: '%s' and '%s'", (from), (to)
 
-#if LUR_DEBUG_ASSERTS
+#if GLUON_DEBUG_ASSERTS
 #define unreachable() \
-	lur_printf("unreachable code entered on #%d", \
+	gluon_printf("unreachable code entered on #%d", \
 		__LINE__), \
 	exit(EXIT_FAILURE)
 #define assert(cond) \
 	if (!(cond)) \
-		lur_printf("assertion failed on #%d", __LINE__), \
+		gluon_printf("assertion failed on #%d", __LINE__), \
 		exit(EXIT_FAILURE)
 #else
 #define unreachable()
@@ -350,8 +354,8 @@ typedef struct vref_t {
 	struct vref_t* next;
 } vref_t;
 
-typedef struct lur_t lur_t;
-typedef value_t (*syscall_fn_t)(value_t*, lur_t*);
+typedef struct gluon_t gluon_t;
+typedef value_t (*syscall_fn_t)(value_t*, gluon_t*);
 
 typedef struct func_t {
 	obj_t obj;
@@ -429,7 +433,7 @@ typedef struct {
 	vref_t* open_vrefs;
 	map_t* names;
 	thread_t threads[MAX_THREADS];
-	lur_t* ctx;
+	gluon_t* ctx;
 } vm_t;
 
 typedef enum {
@@ -629,7 +633,7 @@ typedef struct ast_node_t {
 typedef struct {
 	const char* pos;
 	int line;
-	lur_t* ctx;
+	gluon_t* ctx;
 } scanner_t;
 
 typedef enum {
@@ -800,7 +804,7 @@ typedef struct parser_t {
 	token_t cur;
 	token_t prev;
 	ast_node_t* prefix;
-	lur_t* ctx;
+	gluon_t* ctx;
 } parser_t;
 
 typedef struct {
@@ -823,7 +827,7 @@ typedef struct comp_t {
 	cl_vref_t vrefs[MAX_VREFS];
 	struct comp_t* parent;
 	ast_node_t* cur;
-	lur_t* ctx;
+	gluon_t* ctx;
 } comp_t;
 
 typedef struct {
@@ -841,10 +845,10 @@ typedef struct {
 
 typedef struct {
 	size_t memory_limit;
-} lur_config_t;
+} gluon_config_t;
 
-typedef struct lur_t {
-	lur_config_t cfg;
+typedef struct gluon_t {
+	gluon_config_t cfg;
 	comp_t cl;
 	vm_t vm;
 	size_t cur_vm;
@@ -867,7 +871,7 @@ typedef struct lur_t {
 	array_t* args;
 	
 	text_t* error_msg;
-} lur_t;
+} gluon_t;
 
 static unsigned nextpow2(unsigned n) {
 	if (n > 0 && n < INIT_ARRAY_CAP)
@@ -883,11 +887,11 @@ static unsigned nextpow2(unsigned n) {
 
 static void text_print(const text_t*);
 static void text_eprint(const text_t*);
-static void conc_error_line(lur_t*, const text_t*, int);
-static void print_stack_trace(const lur_t*);
-static text_t* text_fmt(lur_t*, const char*, ...);
+static void conc_error_line(gluon_t*, const text_t*, int);
+static void print_stack_trace(const gluon_t*);
+static text_t* text_fmt(gluon_t*, const char*, ...);
 
-static void error(lur_t* ctx, const char* msg, ...) {
+static void error(gluon_t* ctx, const char* msg, ...) {
 	assert(ctx && msg);
 	
 	char buffer[MAX_ERR_MSG];
@@ -910,7 +914,7 @@ static void error(lur_t* ctx, const char* msg, ...) {
 			func->name->len, func->name->buffer,
 			line, buffer);
 	conc_error_line(ctx, func->src, line);
-	lur_eprintf("%s", ctx->error_msg->buffer);
+	gluon_eprintf("%s", ctx->error_msg->buffer);
 	
 	if (ctx->running) {
 		print_stack_trace(ctx);
@@ -922,15 +926,15 @@ static void error(lur_t* ctx, const char* msg, ...) {
 	longjmp(ctx->errjmp, 1);
 }
 
-const char* lur_get_error(lur_t* ctx) {
+const char* gluon_get_error(gluon_t* ctx) {
 	return (const char*)ctx->error_msg->buffer;
 }
 
 static text_t* text_concat(
-	const text_t*, const text_t*, lur_t*);
+	const text_t*, const text_t*, gluon_t*);
 
 static void conc_error_line(
-	lur_t* ctx, const text_t* text, int line)
+	gluon_t* ctx, const text_t* text, int line)
 {
 	int count = 1;
 	size_t len = 0;
@@ -956,40 +960,40 @@ static void conc_error_line(
 	}
 }
 
-static void print_stack_trace(const lur_t* ctx) {
+static void print_stack_trace(const gluon_t* ctx) {
 	const cframe_t* cur = ctx->vm.fp;
 	const cframe_t* end = ctx->vm.calls;
 	if (cur == end)
 		return;
 	
-	lur_eprintf("[ stack trace: ]\n");
+	gluon_eprintf("[ stack trace: ]\n");
 	int index = 0;
 	do {
-		lur_eprintf("%d: ", index);
+		gluon_eprintf("%d: ", index);
 		text_eprint(cur->func->name);
-		lur_eprintf("\n");
+		gluon_eprintf("\n");
 		cur--;
 		index++;
 	} while (cur > end);
 }
 
-static void gc_collect(lur_t*);
-static void gc_pause(lur_t*);
-static void gc_resume(lur_t*);
+static void gc_collect(gluon_t*);
+static void gc_pause(gluon_t*);
+static void gc_resume(gluon_t*);
 
-value_t lur_call_function(
-	lur_t*, const fref_t*, value_t*, size_t);
-static text_t* text_new(const uint8_t*, size_t, lur_t*);
+value_t gluon_call_function(
+	gluon_t*, const fref_t*, value_t*, size_t);
+static text_t* text_new(const uint8_t*, size_t, gluon_t*);
 
 static void* alloc(
-	lur_t* ctx, void* p, size_t os, size_t ns,
+	gluon_t* ctx, void* p, size_t os, size_t ns,
 	int64_t line, const char* func)
 {
 	if (os == ns) return p;
 	
-	#if LUR_DEBUG_PRINT_ALLOCS
+	#if GLUON_DEBUG_PRINT_ALLOCS
 	if (ctx && p != ctx)
-		lur_dprintf("[mem: %+d - %s:%llu - %p]\n",
+		gluon_dprintf("[mem: %+d - %s:%llu - %p]\n",
 			ns - os, func, line, p);
 	#endif
 		
@@ -1031,7 +1035,7 @@ static void* alloc(
 	((p) = alloc(ctx, p, sizeof(t) * (n), 0, \
 		__LINE__, __func__))
 
-static obj_t* obj_new(size_t size, type_t tag, lur_t* ctx) {
+static obj_t* obj_new(size_t size, type_t tag, gluon_t* ctx) {
 	assert(size > 0 && ctx);
 	obj_t* obj = mem_alloc(ctx, size);
 	obj->tag = tag;
@@ -1040,14 +1044,14 @@ static obj_t* obj_new(size_t size, type_t tag, lur_t* ctx) {
 	return obj;
 }
 
-static void text_free(text_t*, lur_t*);
-static void array_free(array_t*, lur_t*);
-static void map_free(map_t*, lur_t*);
-static void func_free(func_t*, lur_t*);
-static void fref_free(fref_t*, lur_t*);
-static void vref_free(vref_t*, lur_t*);
+static void text_free(text_t*, gluon_t*);
+static void array_free(array_t*, gluon_t*);
+static void map_free(map_t*, gluon_t*);
+static void func_free(func_t*, gluon_t*);
+static void fref_free(fref_t*, gluon_t*);
+static void vref_free(vref_t*, gluon_t*);
 
-static void obj_free(obj_t* obj, lur_t* ctx) {
+static void obj_free(obj_t* obj, gluon_t* ctx) {
 	assert(obj && ctx);
 	switch (obj->tag) {
 	case TYPE_TEXT: text_free((text_t*)obj, ctx); break;
@@ -1061,7 +1065,7 @@ static void obj_free(obj_t* obj, lur_t* ctx) {
 }
 
 static text_t* text_new(
-	const uint8_t* buffer, size_t len, lur_t* ctx)
+	const uint8_t* buffer, size_t len, gluon_t* ctx)
 {
 	assert(ctx);
 	text_t* text = (text_t*)obj_new(
@@ -1078,12 +1082,12 @@ static text_t* text_new(
 	return text;
 }
 
-static text_t* text_copy(const text_t* src, lur_t* ctx) {
+static text_t* text_copy(const text_t* src, gluon_t* ctx) {
 	assert(src && ctx);
 	return text_new(src->buffer, src->len, ctx);
 }
 
-static void text_free(text_t* text, lur_t* ctx) {
+static void text_free(text_t* text, gluon_t* ctx) {
 	assert(text && ctx);
 	arr_free(ctx, text->buffer, uint8_t, text->len + 1);
 	mem_free(ctx, text, sizeof(text_t));
@@ -1112,7 +1116,7 @@ static text_t* text_cmp(const text_t* a, const text_t* b) {
 }
 
 static text_t* text_concat(
-	const text_t* a, const text_t* b, lur_t* ctx)
+	const text_t* a, const text_t* b, gluon_t* ctx)
 {
 	assert(b && ctx);
 	if (!a || a->len == 0) return text_copy(b, ctx);
@@ -1126,7 +1130,7 @@ static text_t* text_concat(
 	return result;
 }
 
-static void text_push(text_t* text, uint8_t ch, lur_t* ctx) {
+static void text_push(text_t* text, uint8_t ch, gluon_t* ctx) {
 	assert(text && ctx);
 	arr_alloc(ctx, text->buffer, uint8_t,
 		text->len + 1, text->len + 2);
@@ -1134,7 +1138,7 @@ static void text_push(text_t* text, uint8_t ch, lur_t* ctx) {
 	text->buffer[text->len] = '\0';
 }
 
-static uint8_t text_pop(text_t* text, lur_t* ctx) {
+static uint8_t text_pop(text_t* text, gluon_t* ctx) {
 	assert(text && ctx);
 	arr_alloc(ctx, text->buffer, uint8_t,
 		text->len + 1, text->len);
@@ -1147,7 +1151,7 @@ static uint8_t text_pop(text_t* text, lur_t* ctx) {
 	return result;
 }
 
-static text_t* text_fmt(lur_t* ctx, const char* msg, ...) {
+static text_t* text_fmt(gluon_t* ctx, const char* msg, ...) {
 	assert(ctx && msg);
 	
 	va_list args;
@@ -1160,7 +1164,7 @@ static text_t* text_fmt(lur_t* ctx, const char* msg, ...) {
 }
 
 static text_t* text_slice(
-	const text_t* text, size_t start, size_t end, lur_t* ctx)
+	const text_t* text, size_t start, size_t end, gluon_t* ctx)
 {
 	text_t* new_text = text_new(
 		text->buffer + (size_t)start,
@@ -1171,7 +1175,7 @@ static text_t* text_slice(
 }
 
 static text_t* text_repeat(
-	const text_t* text, size_t times, lur_t* ctx) {
+	const text_t* text, size_t times, gluon_t* ctx) {
 	assert(text);
 	gc_pause(ctx);
 	text_t* result = text_new(NULL, 0, ctx);
@@ -1181,7 +1185,7 @@ static text_t* text_repeat(
 	return result;
 }
 
-static text_t* text_escape(const text_t* input, lur_t* ctx)
+static text_t* text_escape(const text_t* input, gluon_t* ctx)
 {
 	assert(input && ctx);
 	gc_pause(ctx);
@@ -1250,7 +1254,7 @@ static text_t* text_replace_all(
 	const text_t* text,
 	const text_t* find,
 	const text_t* rep,
-	lur_t* ctx)
+	gluon_t* ctx)
 {
 	text_t* output = text_new(NULL, 0, ctx);
 	
@@ -1273,7 +1277,7 @@ static text_t* text_replace_all(
 	return output;
 }
 
-static text_t* text_reverse(const text_t* text, lur_t* ctx) {
+static text_t* text_reverse(const text_t* text, gluon_t* ctx) {
 	assert(text && ctx);
 	gc_pause(ctx);
 	text_t* rev = text_new(NULL, 0, ctx);
@@ -1288,7 +1292,7 @@ static text_t* text_reverse(const text_t* text, lur_t* ctx) {
 #define min3(a, b, c) min2(a, min2(b, c))
 
 static int32_t text_edit_dist(
-	const text_t* a, const text_t* b, lur_t* ctx)
+	const text_t* a, const text_t* b, gluon_t* ctx)
 {
 	assert(a && b && ctx);
 	if (strcmp((const char*)a->buffer,
@@ -1326,20 +1330,20 @@ static int32_t text_edit_dist(
 
 static void text_print(const text_t* text) {
 	assert(text);
-	lur_printf("%.*s", (int)text->len, text->buffer);
+	gluon_printf("%.*s", (int)text->len, text->buffer);
 }
 
 static void text_eprint(const text_t* text) {
 	assert(text);
-	lur_dprintf("%.*s", (int)text->len, text->buffer);
+	gluon_dprintf("%.*s", (int)text->len, text->buffer);
 }
 
 static void text_dprint(const text_t* text) {
 	assert(text);
-	lur_dprintf("%.*s", (int)text->len, text->buffer);
+	gluon_dprintf("%.*s", (int)text->len, text->buffer);
 }
 
-static array_t* array_new(lur_t* ctx) {
+static array_t* array_new(gluon_t* ctx) {
 	assert(ctx);
 	array_t* array = (array_t*)obj_new(
 		sizeof(array_t), TYPE_ARRAY, ctx);
@@ -1348,10 +1352,10 @@ static array_t* array_new(lur_t* ctx) {
 	return array;
 }
 
-static void array_push(array_t*, value_t, lur_t*);
+static void array_push(array_t*, value_t, gluon_t*);
 
-array_t* lur_new_array(
-	const value_t* items, size_t len, lur_t* ctx)
+array_t* gluon_new_array(
+	const value_t* items, size_t len, gluon_t* ctx)
 {
 	array_t* array = array_new(ctx);
 	for (size_t i = 0; i < len; i++)
@@ -1359,8 +1363,8 @@ array_t* lur_new_array(
 	return array;
 }
 
-array_t* lur_new_num_array(
-	const double* items, size_t len, lur_t* ctx)
+array_t* gluon_new_num_array(
+	const double* items, size_t len, gluon_t* ctx)
 {
 	array_t* array = array_new(ctx);
 	for (size_t i = 0; i < len; i++)
@@ -1368,11 +1372,11 @@ array_t* lur_new_num_array(
 	return array;
 }
 
-static value_t value_copy(value_t, bool, lur_t*);
+static value_t value_copy(value_t, bool, gluon_t*);
 static bool value_is_obj(value_t);
 
 static array_t* array_copy(
-	const array_t* src, bool deep, lur_t* ctx)
+	const array_t* src, bool deep, gluon_t* ctx)
 {
 	assert(src && ctx);
 	gc_pause(ctx);
@@ -1389,17 +1393,17 @@ static array_t* array_copy(
 	return dst;
 }
 
-static void array_free(array_t* array, lur_t* ctx) {
+static void array_free(array_t* array, gluon_t* ctx) {
 	assert(array && ctx);
 	arr_free(ctx,
 		array->items, value_t, nextpow2(array->len));
 	mem_free(ctx, array, sizeof(array));
 }
 
-static text_t* value_to_text(value_t, lur_t*);
+static text_t* value_to_text(value_t, gluon_t*);
 
 static size_t array_convert_index(
-	const array_t* array, double index, lur_t* ctx)
+	const array_t* array, double index, gluon_t* ctx)
 {
 	if (index < 0)
 		index = array->len + index;
@@ -1421,7 +1425,7 @@ static bool array_eq(const array_t* a, const array_t* b) {
 }
 
 static void array_push(
-	array_t* array, value_t value, lur_t* ctx)
+	array_t* array, value_t value, gluon_t* ctx)
 {
 	assert(array && ctx);
 	arr_alloc(ctx, array->items, value_t,
@@ -1429,7 +1433,7 @@ static void array_push(
 	array->items[array->len++] = value;
 }
 
-static value_t array_pop(array_t* array, lur_t* ctx) {
+static value_t array_pop(array_t* array, gluon_t* ctx) {
 	assert(array && ctx);
 	if (array->len == 0)
 		error(ctx, ERR_KEY(make_number(0)));
@@ -1441,7 +1445,7 @@ static value_t array_pop(array_t* array, lur_t* ctx) {
 }
 
 static void array_insert(
-	array_t* array, size_t index, value_t value, lur_t* ctx)
+	array_t* array, size_t index, value_t value, gluon_t* ctx)
 {
 	assert(array && ctx);
 	if (array->len == 0) {
@@ -1458,7 +1462,7 @@ static void array_insert(
 }
 
 static void array_delete(
-	array_t* array, size_t index, lur_t* ctx)
+	array_t* array, size_t index, gluon_t* ctx)
 {
 	assert(array && ctx);
 	if (array->len == 0) return;
@@ -1470,7 +1474,7 @@ static void array_delete(
 }
 
 static array_t* array_concat(
-	const array_t* a, const array_t* b, lur_t* ctx)
+	const array_t* a, const array_t* b, gluon_t* ctx)
 {
 	assert(a && b && ctx);
 	gc_pause(ctx);
@@ -1484,7 +1488,7 @@ static array_t* array_concat(
 }
 
 static array_t* array_repeat(
-	const array_t* target, size_t times, lur_t* ctx)
+	const array_t* target, size_t times, gluon_t* ctx)
 {
 	assert(target && target > 0 && ctx);
 	gc_pause(ctx);
@@ -1514,7 +1518,7 @@ static bool array_contains(array_t* array, value_t item) {
 }
 
 static const char* type_name(type_t type);
-static value_t value_math(value_t, value_t, int, lur_t*);
+static value_t value_math(value_t, value_t, int, gluon_t*);
 
 static int sort_cmp(const void* ap, const void* bp) {
 	value_t a = *(value_t*)ap;
@@ -1539,7 +1543,7 @@ static int sort_cmp(const void* ap, const void* bp) {
 	return 0;
 }
 
-static array_t* array_sort(const array_t* array, lur_t* ctx) {
+static array_t* array_sort(const array_t* array, gluon_t* ctx) {
 	assert(array && ctx);
 	array_t* result = array_copy(array, false, ctx);
 	if (result->len <= 1) return result;
@@ -1550,7 +1554,7 @@ static array_t* array_sort(const array_t* array, lur_t* ctx) {
 	return result;
 }
 
-static array_t* array_flat(const array_t* input, lur_t* ctx) {
+static array_t* array_flat(const array_t* input, gluon_t* ctx) {
 	assert(input && ctx);
 	array_t* output = array_new(ctx);
 	for (size_t i = 0; i < input->len; i++) {
@@ -1565,7 +1569,7 @@ static array_t* array_flat(const array_t* input, lur_t* ctx) {
 }
 
 static array_t* array_reverse(
-	const array_t* array, lur_t* ctx)
+	const array_t* array, gluon_t* ctx)
 {
 	assert(array);
 	gc_pause(ctx);
@@ -1577,9 +1581,9 @@ static array_t* array_reverse(
 	return rev;
 }
 
-static text_t* value_to_text(value_t, lur_t*);
+static text_t* value_to_text(value_t, gluon_t*);
 
-static text_t* array_join(const array_t* array, lur_t* ctx) {
+static text_t* array_join(const array_t* array, gluon_t* ctx) {
 	assert(array && ctx);
 	gc_pause(ctx);
 	text_t* text = text_new(NULL, 0, ctx);
@@ -1591,7 +1595,7 @@ static text_t* array_join(const array_t* array, lur_t* ctx) {
 }
 
 static array_t* array_rotate_left(
-	const array_t* input, size_t n, lur_t* ctx)
+	const array_t* input, size_t n, gluon_t* ctx)
 {
 	assert(input && ctx);
 	array_t* array = array_copy(input, false, ctx);
@@ -1606,7 +1610,7 @@ static array_t* array_rotate_left(
 }
 
 static array_t* array_rotate_right(
-	const array_t* input, size_t n, lur_t* ctx)
+	const array_t* input, size_t n, gluon_t* ctx)
 {
 	assert(input && ctx);
 	array_t* array = array_copy(input, false, ctx);
@@ -1620,7 +1624,7 @@ static array_t* array_rotate_right(
 	return array;
 }
 
-static map_t* map_new(lur_t* ctx) {
+static map_t* map_new(gluon_t* ctx) {
 	assert(ctx);
 	map_t* map = (map_t*)obj_new(
 		sizeof(map_t), TYPE_MAP, ctx);
@@ -1631,10 +1635,10 @@ static map_t* map_new(lur_t* ctx) {
 	return map;
 }
 
-static bool map_set(map_t*, value_t, value_t, lur_t*);
+static bool map_set(map_t*, value_t, value_t, gluon_t*);
 
 static map_t* map_copy(
-	const map_t* src, bool deep, lur_t* ctx)
+	const map_t* src, bool deep, gluon_t* ctx)
 {
 	assert(src && ctx);
 	
@@ -1661,7 +1665,7 @@ static map_t* map_copy(
 	return dst;
 }
 
-static void map_free(map_t* map, lur_t* ctx) {
+static void map_free(map_t* map, gluon_t* ctx) {
 	assert(map && ctx);
 	arr_free(ctx, map->entries, map_entry_t, map->cap);
 	mem_free(ctx, map, sizeof(map));
@@ -1689,7 +1693,7 @@ static bool map_eq(const map_t* a, const map_t* b) {
 	return true;
 }
 
-static uint32_t value_hash(value_t, lur_t*);
+static uint32_t value_hash(value_t, gluon_t*);
 
 static map_entry_t* map_find_entry(
 	int64_t* indices,
@@ -1697,7 +1701,7 @@ static map_entry_t* map_find_entry(
 	size_t cap,
 	size_t len,
 	value_t key,
-	lur_t* ctx)
+	gluon_t* ctx)
 {
 	assert(entries);
 	uint32_t hash = value_hash(key, ctx);
@@ -1727,7 +1731,7 @@ static map_entry_t* map_find_entry(
 }
 
 static void map_set_cap(
-	map_t* map, size_t cap, lur_t* ctx)
+	map_t* map, size_t cap, gluon_t* ctx)
 {
 	assert(map && ctx);
 	gc_pause(ctx);
@@ -1764,10 +1768,10 @@ static void map_set_cap(
 	gc_resume(ctx);
 }
 
-static void value_print(value_t, lur_t*);
+static void value_print(value_t, gluon_t*);
 
 static bool map_set(
-	map_t* map, value_t key, value_t value, lur_t* ctx)
+	map_t* map, value_t key, value_t value, gluon_t* ctx)
 {
 	assert(map && ctx);
 	
@@ -1797,7 +1801,7 @@ bool map_get(
 	const map_t* map,
 	value_t key,
 	value_t* value,
-	lur_t* ctx)
+	gluon_t* ctx)
 {
 	assert(map && ctx);
 	if (map->len == 0) return false;
@@ -1816,7 +1820,7 @@ bool map_get(
 	return true;
 }
 
-bool map_delete(map_t* map, value_t key, lur_t* ctx) {
+bool map_delete(map_t* map, value_t key, gluon_t* ctx) {
 	assert(map && ctx);
 	if (map->len == 0) return false;
 	
@@ -1836,7 +1840,7 @@ bool map_delete(map_t* map, value_t key, lur_t* ctx) {
 }
 
 static void map_extend(
-	map_t* dst, const map_t* src, lur_t* ctx)
+	map_t* dst, const map_t* src, gluon_t* ctx)
 {
 	assert(dst && src && ctx);
 	for (size_t i = 0; i < src->len; i++) {
@@ -1847,7 +1851,7 @@ static void map_extend(
 }
 
 static map_t* map_reverse(
-	const map_t* src, lur_t* ctx)
+	const map_t* src, gluon_t* ctx)
 {
 	assert(src && ctx);
 	gc_pause(ctx);
@@ -1863,7 +1867,7 @@ static map_t* map_reverse(
 	return dst;
 }
 
-static fref_t* fref_new(const func_t* func, lur_t* ctx) {
+static fref_t* fref_new(const func_t* func, gluon_t* ctx) {
 	assert(func && ctx);
 	fref_t* fref = (fref_t*)obj_new(
 		sizeof(fref_t), TYPE_FREF, ctx);
@@ -1877,7 +1881,7 @@ static fref_t* fref_new(const func_t* func, lur_t* ctx) {
 }
 
 static fref_t* fref_copy(
-	const fref_t* src, bool deep, lur_t* ctx)
+	const fref_t* src, bool deep, gluon_t* ctx)
 {
 	assert(src && ctx);
 	gc_pause(ctx);
@@ -1898,13 +1902,13 @@ static fref_t* fref_copy(
 	return dst;
 }
 
-static void fref_free(fref_t* fref, lur_t* ctx) {
+static void fref_free(fref_t* fref, gluon_t* ctx) {
 	assert(fref && ctx);
 	arr_free(ctx, fref->vrefs, vref_t*, fref->nvrefs);
 	mem_free(ctx, fref, sizeof(fref_t));
 }
 
-static vref_t* vref_new(int index, lur_t* ctx) {
+static vref_t* vref_new(int index, gluon_t* ctx) {
 	assert(ctx);
 	vref_t* vref = (vref_t*)obj_new(
 		sizeof(vref_t), TYPE_VREF, ctx);
@@ -1914,12 +1918,12 @@ static vref_t* vref_new(int index, lur_t* ctx) {
 	return vref;
 }
 
-static void vref_free(vref_t* vref, lur_t* ctx) {
+static void vref_free(vref_t* vref, gluon_t* ctx) {
 	assert(vref && ctx);
 	mem_free(ctx, vref, sizeof(vref_t));
 }
 
-static func_t* func_new(lur_t* ctx) {
+static func_t* func_new(gluon_t* ctx) {
 	assert(ctx);
 	func_t* func = (func_t*)obj_new(
 		sizeof(func_t), TYPE_FUNC, ctx);
@@ -1937,7 +1941,7 @@ static func_t* func_new(lur_t* ctx) {
 	return func;
 }
 
-static void func_free(func_t* func, lur_t* ctx) {
+static void func_free(func_t* func, gluon_t* ctx) {
 	assert(func && ctx);
 	arr_free(ctx, func->code, uint8_t,
 		nextpow2(func->ncode));
@@ -1964,7 +1968,7 @@ static bool func_eq(const func_t* a, const func_t* b) {
 }
 
 static void func_write(
-	func_t* func, uint8_t byte, int line, lur_t* ctx)
+	func_t* func, uint8_t byte, int line, gluon_t* ctx)
 {
 	assert(func && ctx);
 	if (func->ncode == MAX_CODE)
@@ -1985,7 +1989,7 @@ static void func_write(
 }
 
 static size_t func_write_value(
-	func_t* func, value_t value, lur_t* ctx)
+	func_t* func, value_t value, gluon_t* ctx)
 {
 	assert(func && ctx);
 	for (size_t i = 0; i < func->ndata; i++)
@@ -2035,7 +2039,7 @@ static bool type_is_obj(type_t type) {
 }
 
 static text_t* value_to_text_ex(
-	value_t value, bool quote_text, size_t max_len, lur_t* ctx)
+	value_t value, bool quote_text, size_t max_len, gluon_t* ctx)
 {
 	assert(ctx);
 	text_t* result = NULL;
@@ -2138,13 +2142,13 @@ static text_t* value_to_text_ex(
 	return result;
 }
 
-static text_t* value_to_text(value_t value, lur_t* ctx) {
+static text_t* value_to_text(value_t value, gluon_t* ctx) {
 	assert(ctx);
 	return value_to_text_ex(value, false, 0, ctx);
 }
 
 static void value_print_ex(
-	value_t value, bool quote_text, size_t max_len, lur_t* ctx)
+	value_t value, bool quote_text, size_t max_len, gluon_t* ctx)
 {
 	assert(ctx);
 	text_print(value_to_text_ex(
@@ -2152,19 +2156,19 @@ static void value_print_ex(
 }
 
 static void value_dprint_ex(
-	value_t value, bool quote_text, size_t max_len, lur_t* ctx)
+	value_t value, bool quote_text, size_t max_len, gluon_t* ctx)
 {
 	assert(ctx);
 	text_dprint(value_to_text_ex(
 		value, quote_text, max_len, ctx));
 }
 
-static void value_print(value_t value, lur_t* ctx) {
+static void value_print(value_t value, gluon_t* ctx) {
 	assert(ctx);
 	text_print(value_to_text(value, ctx));
 }
 
-static void value_dprint(value_t value, lur_t* ctx) {
+static void value_dprint(value_t value, gluon_t* ctx) {
 	assert(ctx);
 	text_dprint(value_to_text(value, ctx));
 }
@@ -2192,7 +2196,7 @@ static bool value_eq(value_t a, value_t b) {
 	return false;
 }
 
-static text_t* value_serialize(value_t value, lur_t* ctx) {
+static text_t* value_serialize(value_t value, gluon_t* ctx) {
 	gc_pause(ctx);
 	text_t* result = NULL;
 	
@@ -2333,7 +2337,7 @@ static text_t* value_serialize(value_t value, lur_t* ctx) {
 }
 
 static value_t deserialize(
-	char* data, size_t offset, lur_t* ctx)
+	char* data, size_t offset, gluon_t* ctx)
 {
 	const char* delim = " ";
 	char* tok = strtok((offset == 0) ? data : NULL, delim);
@@ -2453,7 +2457,7 @@ static value_t deserialize(
 }
 
 static value_t value_deserialize(
-	const text_t* data, lur_t* ctx)
+	const text_t* data, gluon_t* ctx)
 {
 	assert(data);
 	gc_pause(ctx);
@@ -2465,7 +2469,7 @@ static value_t value_deserialize(
 }
 
 static value_t value_copy(
-	value_t value, bool deep, lur_t* ctx)
+	value_t value, bool deep, gluon_t* ctx)
 {
 	switch (value.tag) {
 	case TYPE_NONE:
@@ -2496,7 +2500,7 @@ static value_t value_copy(
 		error(ctx, ERR_TYPECHECK((value).tag, (t)))
 		
 static value_t vector_math(
-	value_t a, value_t b, int op, lur_t* ctx)
+	value_t a, value_t b, int op, gluon_t* ctx)
 {
 	gc_pause(ctx);
 			
@@ -2538,7 +2542,7 @@ static value_t vector_math(
 }
 
 static value_t value_math(
-	value_t a, value_t b, int op, lur_t* ctx)
+	value_t a, value_t b, int op, gluon_t* ctx)
 {
 	assert(ctx);
 	switch (op) {
@@ -2688,7 +2692,7 @@ static value_t value_math(
 
 #undef typecheck
 
-static uint32_t value_hash(value_t value, lur_t* ctx) {
+static uint32_t value_hash(value_t value, gluon_t* ctx) {
 	assert(ctx);
 	switch (value.tag) {
 	case TYPE_NONE: return 0;
@@ -2722,24 +2726,24 @@ static uint32_t value_hash(value_t value, lur_t* ctx) {
 	return 0;
 }
 
-static void gc_mark_obj(obj_t* obj, lur_t* ctx) {
+static void gc_mark_obj(obj_t* obj, gluon_t* ctx) {
 	assert(ctx);
 	if (!obj || obj->marked) return;
 	obj->marked = true;
-	ctx->mem.marked = lur_gc_realloc(ctx->mem.marked,
+	ctx->mem.marked = gluon_gc_realloc(ctx->mem.marked,
 		sizeof(obj_t*) * ctx->mem.nmarked + 1);
 	if (!ctx->mem.marked)
 		error(ctx, ERR_OUT_OF_MEMORY);
 	ctx->mem.marked[ctx->mem.nmarked++] = obj;
 }
 
-static void gc_mark_value(value_t value, lur_t* ctx) {
+static void gc_mark_value(value_t value, gluon_t* ctx) {
 	assert(ctx);
 	if (type_is_obj(value.tag))
 		gc_mark_obj(value.data.obj, ctx);
 }
 
-static void gc_deep_mark_obj(obj_t* obj, lur_t* ctx) {
+static void gc_deep_mark_obj(obj_t* obj, gluon_t* ctx) {
 	assert(obj && ctx);
 	switch (obj->tag) {
 		case TYPE_ARRAY: {
@@ -2782,14 +2786,14 @@ static void gc_deep_mark_obj(obj_t* obj, lur_t* ctx) {
 	}
 }
 
-static void gc_mark(lur_t*);
-static void gc_trace_refs(lur_t*);
-static void gc_sweep(lur_t*);
+static void gc_mark(gluon_t*);
+static void gc_trace_refs(gluon_t*);
+static void gc_sweep(gluon_t*);
 
-static void gc_collect(lur_t* ctx) {
+static void gc_collect(gluon_t* ctx) {
 	assert(ctx);
 	
-	#if LUR_DEBUG_DISABLE_GC
+	#if GLUON_DEBUG_DISABLE_GC
 	return;
 	#endif
 	
@@ -2805,7 +2809,7 @@ static void gc_collect(lur_t* ctx) {
 	ctx->mem.gc_cycles++;
 }
 
-static void gc_mark(lur_t* ctx) {
+static void gc_mark(gluon_t* ctx) {
 	assert(ctx);
 	
 	vm_t* vm = &ctx->vm;
@@ -2837,7 +2841,7 @@ static void gc_mark(lur_t* ctx) {
 	gc_mark_obj((obj_t*)ctx->help, ctx);
 }
 
-static void gc_trace_refs(lur_t* ctx) {
+static void gc_trace_refs(gluon_t* ctx) {
 	assert(ctx);
 	
 	while (ctx->mem.nmarked > 0) {
@@ -2847,7 +2851,7 @@ static void gc_trace_refs(lur_t* ctx) {
 	}
 }
 
-static void gc_sweep(lur_t* ctx) {
+static void gc_sweep(gluon_t* ctx) {
 	assert(ctx);
 	
 	obj_t* prev = NULL;
@@ -2871,18 +2875,18 @@ static void gc_sweep(lur_t* ctx) {
 	}
 }
 
-static void gc_pause(lur_t* ctx) {
+static void gc_pause(gluon_t* ctx) {
 	assert(ctx);
 	gc_collect(ctx);
 	ctx->mem.gc_pause++;
 }
 
-static void gc_resume(lur_t* ctx) {
+static void gc_resume(gluon_t* ctx) {
 	assert(ctx && ctx->mem.gc_pause >= 1);
 	ctx->mem.gc_pause--;
 }
 
-static void vm_init(vm_t* vm, lur_t* ctx) {
+static void vm_init(vm_t* vm, gluon_t* ctx) {
 	assert(ctx);
 	gc_pause(ctx);
 	
@@ -2906,38 +2910,38 @@ static void vm_init(vm_t* vm, lur_t* ctx) {
 	gc_resume(ctx);
 }
 
-static void vm_free(vm_t* vm, lur_t* ctx) {
+static void vm_free(vm_t* vm, gluon_t* ctx) {
 	assert(vm && ctx);
 	arr_free(ctx, vm->calls, cframe_t, MAX_CFRAMES);
 	arr_free(ctx, vm->stack, value_t, MAX_STACK);
 }
 
-#if LUR_DEBUG_PRINT_DATA
+#if GLUON_DEBUG_PRINT_DATA
 static void dbg_print_data(const vm_t* vm) {
 	assert(vm);
 	const func_t* func = vm->fp->func;
 	
-	lur_dprintf("data:\n");
+	gluon_dprintf("data:\n");
 	for (size_t i = 0; i < func->ndata; i++) {
-		lur_dprintf("  %02x: %s = ",
+		gluon_dprintf("  %02x: %s = ",
 			i, type_name(func->data[i].tag));
 		value_dprint_ex(func->data[i], true, vm->ctx);
-		lur_dprintf("\n");
+		gluon_dprintf("\n");
 	}
-	lur_dprintf("\n");
+	gluon_dprintf("\n");
 }
 #endif
 
-#if LUR_DEBUG_PRINT_CODE
+#if GLUON_DEBUG_PRINT_CODE
 static void dbg_print_header(const vm_t* vm) {
 	assert(vm);
 	
-	lur_dprintf("\n[%d] ", vm->fp - vm->calls);
+	gluon_dprintf("\n[%d] ", vm->fp - vm->calls);
 	text_dprint(vm->fp->func->name);
-	lur_dprintf("\n");
+	gluon_dprintf("\n");
 	
-	lur_dprintf("addr  line         name bytes      comment |\n");
-	lur_dprintf("-------------------------------------------|\n");
+	gluon_dprintf("addr  line         name bytes      comment |\n");
+	gluon_dprintf("-------------------------------------------|\n");
 }
 
 static void dbg_print_opcode(const vm_t* vm) {
@@ -2952,17 +2956,17 @@ static void dbg_print_opcode(const vm_t* vm) {
 	uint8_t opcode = *vm->fp->ip;
 	
 	if (prev_line != line || addr == 0)
-		lur_dprintf("%04d %5d %12s %02x",
+		gluon_dprintf("%04d %5d %12s %02x",
 			addr, line, OPINFO[opcode].name, opcode);
 	else
-		lur_dprintf("%04d     | %12s %02x",
+		gluon_dprintf("%04d     | %12s %02x",
 			addr, OPINFO[opcode].name, opcode);
 	
 	for (int i = 0; i < OPINFO[opcode].len; i++)
-		lur_dprintf(" %02x", vm->fp->ip[i + 1]);
+		gluon_dprintf(" %02x", vm->fp->ip[i + 1]);
 		
 	for (int i = 0; i < 3 - OPINFO[opcode].len; i++)
-		lur_dprintf("   ");
+		gluon_dprintf("   ");
 	
 	uint16_t u16arg = vm->fp->ip[1] << 8 | vm->fp->ip[2];
 	switch (opcode) {
@@ -2981,15 +2985,15 @@ static void dbg_print_opcode(const vm_t* vm) {
 		value_t a = vm->sp[-2];
 		value_t b = vm->sp[-1];
 		
-		lur_dprintf("[");
+		gluon_dprintf("[");
 		value_dprint(a, vm->ctx);
-		lur_dprintf(", ");
+		gluon_dprintf(", ");
 		value_dprint(b, vm->ctx);
-		lur_dprintf("] -> [");
+		gluon_dprintf("] -> [");
 		value_dprint(b, vm->ctx);
-		lur_dprintf(", ");
+		gluon_dprintf(", ");
 		value_dprint(a, vm->ctx);
-		lur_dprintf("]");
+		gluon_dprintf("]");
 		break;
 	}
 	case OP_GETLOC: {
@@ -3001,10 +3005,10 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_GETVREF: {
 		vref_t* vref = vm->fp->fref->vrefs[u16arg];
 		if (vref->index == -1) {
-			lur_dprintf("(closed) ");
+			gluon_dprintf("(closed) ");
 			value_print(vref->closed, vm->ctx);
 		} else {
-			lur_dprintf("(open) ");
+			gluon_dprintf("(open) ");
 			value_print(vm->stack[vref->index], vm->ctx);
 		}
 		break;
@@ -3012,10 +3016,10 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_SETVREF: {
 		vref_t* vref = vm->fp->fref->vrefs[u16arg];
 		if (vref->index == -1) {
-			lur_dprintf("(closed) ");
+			gluon_dprintf("(closed) ");
 			value_dprint(vm->sp[-1], vm->ctx);
 		} else {
-			lur_dprintf("(open) ");
+			gluon_dprintf("(open) ");
 			value_dprint(vm->sp[-1], vm->ctx);
 		}
 		break;
@@ -3033,7 +3037,7 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_GETGLOB: {
 		value_t key = vm->fp->func->data[u16arg];
 		value_dprint_ex(key, true, 64, vm->ctx);
-		lur_dprintf(": ");
+		gluon_dprintf(": ");
 		value_t value;
 		map_get(vm->names, key, &value, vm->ctx);
 		value_dprint_ex(value, true, 64, vm->ctx);
@@ -3042,14 +3046,14 @@ static void dbg_print_opcode(const vm_t* vm) {
 	case OP_SETGLOB: {
 		value_t value = vm->fp->func->data[u16arg];
 		value_dprint_ex(value, true, 64, vm->ctx);
-		lur_dprintf(": ");
+		gluon_dprintf(": ");
 		value_dprint_ex(vm->sp[-1], true, 64, vm->ctx);
 		break;
 	}
 	case OP_ADDGLOB: {
 		value_t value = vm->fp->func->data[u16arg];
 		value_dprint_ex(value, false, 64, vm->ctx);
-		lur_dprintf(": ");
+		gluon_dprintf(": ");
 		value_t key = vm->fp->func->data[u16arg];
 		map_get(vm->names, key, &value, vm->ctx);
 		value_dprint_ex(value, true, 64, vm->ctx);
@@ -3062,39 +3066,39 @@ static void dbg_print_opcode(const vm_t* vm) {
 		assert(value.tag == TYPE_FREF);
 		const fref_t* fref = get_fref(vm->sp[-argc - 1]);
 		text_dprint(fref->func->name);
-		lur_dprintf(" (%d arg%c)",
+		gluon_dprintf(" (%d arg%c)",
 			fref->func->argc,
 			(fref->func->argc == 1) ? '\0' : 's');
 		break;
 	}
 	case OP_RET: {
-		lur_dprintf("-> ");
+		gluon_dprintf("-> ");
 		value_dprint_ex(vm->sp[-1], true, 64, vm->ctx);
 		break;
 	}
 	}
 	
-	#if !LUR_DEBUG_PRINT_STACK
-	lur_dprintf("\n");
+	#if !GLUON_DEBUG_PRINT_STACK
+	gluon_dprintf("\n");
 	#endif
 }
 #endif
 
-#if LUR_DEBUG_PRINT_STACK
+#if GLUON_DEBUG_PRINT_STACK
 static void dbg_print_stack(const vm_t* vm) {
 	assert(vm);
 	
 	value_t* cur = vm->stack + vm->fp->slots;
 	value_t* end = vm->sp;
 	
-	lur_dprintf("\n\t [");
+	gluon_dprintf("\n\t [");
 	while (cur != end) {
 		value_print_ex(*cur, true, vm->ctx);
 		cur++;
 		if (cur != end)
-			lur_printf(", ");
+			gluon_printf(", ");
 	}
-	lur_dprintf("]\n");
+	gluon_dprintf("]\n");
 }
 #endif
 
@@ -3147,14 +3151,126 @@ static void vm_close_vrefs(vm_t* vm, int last) {
 
 static void vm_call(vm_t*, value_t, uint8_t, bool);
 
-static value_t vm_launch(
+static bool vm_get_swizzle(
+	vm_t* vm, const array_t* array, value_t key)
+{
+	if (key.tag != TYPE_TEXT)
+		return false;
+		
+	const text_t* key_text = get_text(key);
+	if (key_text->len == 1) {
+		if (key_text->buffer[0] == 'x')
+			push(array->items[0]);
+		else if (key_text->buffer[0] == 'y')
+			push(array->items[1]);
+		else if (key_text->buffer[0] == 'z')
+			push(array->items[2]);
+		else if (key_text->buffer[0] == 'w')
+			push(array->items[3]);
+		else
+			error(vm->ctx, ERR_SWIZZLE_CHAR(
+				key_text->buffer[0]));
+		
+		return true;
+	}
+	
+	array_t* result = array_new(vm->ctx);
+	for (size_t i = 0; i < key_text->len; i++) {
+		uint8_t ch = key_text->buffer[i];
+		if (ch == 'x')
+			array_push(result, array->items[0], vm->ctx);
+		else if (ch == 'y')
+			array_push(result, array->items[1], vm->ctx);
+		else if (ch == 'z')
+			array_push(result, array->items[2], vm->ctx);
+		else if (ch == 'w')
+			array_push(result, array->items[3], vm->ctx);
+		else
+			error(vm->ctx, ERR_SWIZZLE_CHAR(ch));
+	}
+	
+	if (result->len > 0)
+		push(make_array(result));
+	
+	return true;
+}
+
+static bool vm_set_swizzle(
+	vm_t* vm,
+	array_t* array,
+	value_t key,
+	value_t value)
+{
+	if (key.tag != TYPE_TEXT)
+		return false;
+		
+	const text_t* key_text = get_text(key);
+	if (key_text->len == 1) {
+		if (key_text->buffer[0] == 'x')
+			array->items[0] = value;
+		else if (key_text->buffer[0] == 'y')
+			array->items[1] = value;
+		else if (key_text->buffer[0] == 'z')
+			array->items[2] = value;
+		else if (key_text->buffer[0] == 'w')
+			array->items[3] = value;
+		else
+			error(vm->ctx, ERR_SWIZZLE_CHAR(
+				key_text->buffer[0]));
+		
+		push(make_array(array));
+		return true;
+	}
+	
+	if (value.tag != TYPE_ARRAY)
+		error(vm->ctx, ERR_TYPECHECK(
+			value.tag, TYPE_ARRAY));
+	
+	array_t* input = get_array(value);
+	size_t read = 0;
+	bool x = false;
+	bool y = false;
+	bool z = false;
+	bool w = false;
+	for (size_t i = 0; i < key_text->len; i++) {
+		uint8_t ch = key_text->buffer[i];
+		if (ch == 'x') {
+			if (x)
+				error(vm->ctx, ERR_ASSIGN_SWIZZLE);
+			x = true;
+			array->items[0] = input->items[read++];
+		} else if (ch == 'y') {
+			if (y)
+				error(vm->ctx, ERR_ASSIGN_SWIZZLE);
+			y = true;
+			array->items[1] = input->items[read++];
+		} else if (ch == 'z') {
+			if (z)
+				error(vm->ctx, ERR_ASSIGN_SWIZZLE);
+			z = true;
+			array->items[2] = input->items[read++];
+		} else if (ch == 'w') {
+			if (w)
+				error(vm->ctx, ERR_ASSIGN_SWIZZLE);
+			w = true;
+			array->items[3] = input->items[read++];
+		} else {
+			error(vm->ctx, ERR_SWIZZLE_CHAR(ch));
+		}
+	}
+	
+	push(make_array(array));
+	return true;
+}
+
+static value_t vm_exec(
 	vm_t* vm, value_t callable, size_t argc, bool returns)
 {
 	assert(vm);
 	vm_call(vm, callable, argc, returns);
 
 	while (true) {
-		#if LUR_DEBUG_PRINT_CODE
+		#if GLUON_DEBUG_PRINT_CODE
 		dbg_print_opcode(vm);
 		#endif
 		
@@ -3268,34 +3384,9 @@ static value_t vm_launch(
 		case OP_GETFIELD: {
 			if (get(0).tag == TYPE_ARRAY) {
 				gc_pause(vm->ctx);
-				
 				const array_t* array = get_array(pop());
 				value_t key = vm->fp->func->data[read_u16()];
-				if (value_eq(key,
-					make_text(text_lit("x", vm->ctx))))
-				{
-					push(array->items[
-						array_convert_index(array, 0.0, vm->ctx)]);
-				} else if (value_eq(key,
-					make_text(text_lit("y", vm->ctx))))
-				{
-					push(array->items[
-						array_convert_index(array, 1.0, vm->ctx)]);
-				} else if (value_eq(key,
-					make_text(text_lit("z", vm->ctx))))
-				{
-					push(array->items[
-						array_convert_index(array, 2.0, vm->ctx)]);
-				} else if (value_eq(key,
-					make_text(text_lit("w", vm->ctx))))
-				{
-					push(array->items[
-						array_convert_index(array, 3.0, vm->ctx)]);
-				} else {
-					error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
-					unreachable();
-				}
-				
+				vm_get_swizzle(vm, array, key);
 				gc_resume(vm->ctx);
 				break;
 			}
@@ -3313,40 +3404,10 @@ static value_t vm_launch(
 		case OP_SETFIELD: {
 			if (get(1).tag == TYPE_ARRAY) {
 				gc_pause(vm->ctx);
-				
 				value_t value = pop();
-				const array_t* array = get_array(pop());
+				array_t* array = get_array(pop());
 				value_t key = vm->fp->func->data[read_u16()];
-				if (value_eq(key,
-					make_text(text_lit("x", vm->ctx))))
-				{
-					array->items[
-						array_convert_index(array, 0.0, vm->ctx)] =
-							value;
-				} else if (value_eq(key,
-					make_text(text_lit("y", vm->ctx))))
-				{
-					array->items[
-						array_convert_index(array, 1.0, vm->ctx)] =
-							value;
-				} else if (value_eq(key,
-					make_text(text_lit("z", vm->ctx))))
-				{
-					array->items[
-						array_convert_index(array, 2.0, vm->ctx)] =
-							value;
-				} else if (value_eq(key,
-					make_text(text_lit("w", vm->ctx))))
-				{
-					array->items[
-						array_convert_index(array, 3.0, vm->ctx)] =
-							value;
-				} else {
-					error(vm->ctx, ERR_UNDEFINED(key, vm->ctx));
-					unreachable();
-				}
-				
-				push(value);
+				vm_set_swizzle(vm, array, key, value);
 				gc_resume(vm->ctx);
 				break;
 			}
@@ -3475,9 +3536,9 @@ static value_t vm_launch(
 			vm->ncalls--;
 			vm->fp = &vm->calls[vm->ncalls - 1];
 			
-			#if LUR_DEBUG_PRINT_CODE
+			#if GLUON_DEBUG_PRINT_CODE
 			dbg_print_header(vm);
-			#if LUR_DEBUG_PRINT_DATA
+			#if GLUON_DEBUG_PRINT_DATA
 			dbg_print_data(vm);
 			#endif
 			#endif
@@ -3493,7 +3554,7 @@ static value_t vm_launch(
 		default: unreachable();
 		}
 		
-		#if LUR_DEBUG_PRINT_STACK
+		#if GLUON_DEBUG_PRINT_STACK
 		dbg_print_stack(vm);
 		#endif
 	}
@@ -3572,16 +3633,16 @@ static void vm_call(
 	vm->calls[vm->ncalls++] = call;
 	vm->fp = &vm->calls[vm->ncalls - 1];
 	
-	#if LUR_DEBUG_PRINT_CODE
+	#if GLUON_DEBUG_PRINT_CODE
 	dbg_print_header(vm);
-	#if LUR_DEBUG_PRINT_DATA
+	#if GLUON_DEBUG_PRINT_DATA
 	dbg_print_data(vm);
 	#endif
 	#endif
 }
 
-value_t lur_call_function(
-	lur_t* ctx, const fref_t* fref, value_t* args, size_t argc)
+value_t gluon_call_function(
+	gluon_t* ctx, const fref_t* fref, value_t* args, size_t argc)
 {
 	assert(ctx && fref);
 	if (args) {
@@ -3591,7 +3652,7 @@ value_t lur_call_function(
 	
 	if (fref->func->syscall)
 		vm_call(&ctx->vm, make_fref(fref), argc, false);
-	else vm_launch(&ctx->vm, make_fref(fref), argc, true);
+	else vm_exec(&ctx->vm, make_fref(fref), argc, true);
 	
 	return ctx->vm.sp[-1];
 }
@@ -3606,7 +3667,7 @@ value_t lur_call_function(
 #undef typecheck
 	
 static void sc_init(
-	scanner_t* sc, const text_t* src, lur_t* ctx)
+	scanner_t* sc, const text_t* src, gluon_t* ctx)
 {
 	assert(sc && src && ctx);
 	sc->pos = (char*)src->buffer;
@@ -3794,7 +3855,7 @@ static token_t sc_next(scanner_t* sc) {
 }
 
 static void ps_init(
-	parser_t* ps, const text_t* src, lur_t* ctx)
+	parser_t* ps, const text_t* src, gluon_t* ctx)
 {
 	assert(ps && src && ctx);
 	
@@ -3818,10 +3879,10 @@ static void ps_next(parser_t* ps) {
 	ps->prev = ps->cur;
 	ps->cur = sc_next(&ps->scanner);
 	
-	#if LUR_DEBUG_PRINT_TOKENS
-	lur_dprintf("token: ");
+	#if GLUON_DEBUG_PRINT_TOKENS
+	gluon_dprintf("token: ");
 	text_dprint(ps->cur.lex);
-	lur_dprintf("\n");
+	gluon_dprintf("\n");
 	#endif
 }
 
@@ -3889,43 +3950,6 @@ static ast_node_t* ps_prec(
 
 static ast_node_t* ps_expr(parser_t* ps) {
 	assert(ps);
-	bool has_arg = ps_check(ps, T_NAME) ||
-		ps_check(ps, T_NONE) ||
-		ps_check(ps, T_FALSE) ||
-		ps_check(ps, T_TRUE) ||
-		ps_check(ps, T_NUMBER) ||
-		ps_check(ps,  T_TEXT) ||
-		ps_check(ps, T_LSQUARE) ||
-		ps_check(ps, T_LCURLY);
-	has_arg = false;
-	
-	if (has_arg) {
-		puts("hi");
-		printf("call %.*s\n", ps->cur.lex->len, ps->cur.lex->buffer);
-		ast_node_t* node = ps_new_node(ps);
-		node->tag = AST_CALL;
-		node->data.call.func = ps->prefix;
-		node->data.call.argc = 0;
-		node->data.call.args = NULL;
-	
-		while (!ps_check(ps, T_EOF)) {
-			if (node->data.call.argc == MAX_ARGS)
-				error(ps->ctx, ERR_LIMIT("max call args",
-					MAX_ARGS));
-		
-			arr_alloc(ps->ctx,
-				node->data.call.args, ast_node_t*,
-				node->data.call.argc, node->data.call.argc + 1);
-			node->data.call.args[node->data.call.argc++] =
-				ps_prec(ps, PREC_ASSIGN);
-			
-			if (!ps_match(ps, T_COMMA))
-				break;
-		}
-	
-		return node;
-	}
-	
 	return ps_prec(ps, PREC_ASSIGN);
 }
 
@@ -3969,7 +3993,7 @@ static ast_node_t* ps_name(parser_t* ps) {
 		{
 			if (node->data.fun.nparams == MAX_ARGS)
 				error(ps->ctx, ERR_LIMIT(
-					"max args", MAX_ARGS));
+					"max parameter", MAX_ARGS));
 		
 			ps_eat(ps, T_NAME, "expected parameter name");
 			arr_alloc(ps->ctx,
@@ -3991,12 +4015,6 @@ static ast_node_t* ps_name(parser_t* ps) {
 		node->data.fun.body = ps_expr(ps);
 		return node;
 	}
-	
-	/**/
-	/*bool has_arg = true;
-	if (has_arg) {
-		
-	}*/
 	
 	node->tag = AST_LOAD;
 	node->data.load.name = name;
@@ -4105,7 +4123,7 @@ static ast_node_t* ps_map(parser_t* ps) {
 			node->data.map.len, node->data.map.len + 1);
 		node->data.map.keys[node->data.map.len++] =
 			ps_expr(ps);
-			
+		
 		ps_eat(ps, T_EQ_GT, "expected '=>' after entry key");
 	
 		arr_alloc(ps->ctx,
@@ -4388,7 +4406,7 @@ static ast_node_t* ps_parse(parser_t* ps) {
 static void cl_add_sym(comp_t*, const text_t*);
 static void cl_push_value(comp_t*, value_t);
 
-static void cl_init(comp_t* cl, const text_t* src, lur_t* ctx) {
+static void cl_init(comp_t* cl, const text_t* src, gluon_t* ctx) {
 	assert(cl && ctx);
 	
 	cl->func = func_new(ctx);
@@ -5021,7 +5039,7 @@ static void cl_compile(
 	ast_node_t* ast = ps_parse(&cl->parser);
 	cl_compile_ast(cl, ast);
 	
-	#if LUR_DEBUG_PRINT_AST
+	#if GLUON_DEBUG_PRINT_AST
 	dbg_print_ast(cl, ast, 0);
 	#endif
 	
@@ -5057,14 +5075,14 @@ static void cl_compile(
 		error(ctx, ERR_TYPECHECK_ARG( \
 			args[arg].tag, (t), arg))
 			
-static text_t* io_read(const text_t*, lur_t*);
+static text_t* io_read(const text_t*, gluon_t*);
 
 #define STD_HELP_DOC \
 	"name\n" \
 	"Shows help text for a function or variable.\n" \
 	"Use help: \"all\" to see all documentation."
 	
-static value_t std_help(value_t* args, lur_t* ctx) {
+static value_t std_help(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* name = get_text(args[0]);
 	
@@ -5116,14 +5134,14 @@ static value_t std_help(value_t* args, lur_t* ctx) {
 	"path\n" \
 	"Loads and executes a script from a path."
 
-static value_t std_load(value_t* args, lur_t* ctx) {
+static value_t std_load(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	cl_init(&ctx->cl, ctx->cl.func->src, ctx);
 	cl_compile(&ctx->cl,
 		io_read(get_text(args[0]), ctx),
 		get_text(args[0]));
 	
-	vm_launch(&ctx->vm,
+	vm_exec(&ctx->vm,
 		make_fref(fref_new(ctx->cl.func, ctx)), 0, true);
 		
 	cl_free(&ctx->cl);
@@ -5135,13 +5153,13 @@ static value_t std_load(value_t* args, lur_t* ctx) {
 	"Evaluates some code from text, returns its return " \
 	"value."
 
-static value_t std_eval(value_t* args, lur_t* ctx) {
+static value_t std_eval(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	cl_init(&ctx->cl, ctx->cl.func->src, ctx);
 	cl_compile(&ctx->cl,
 		get_text(args[0]),
 		get_text(args[0]));
-	value_t result = vm_launch(&ctx->vm,
+	value_t result = vm_exec(&ctx->vm,
 		make_fref(fref_new(ctx->cl.func, ctx)), 0, true);
 	cl_free(&ctx->cl);
 	return result;
@@ -5150,7 +5168,7 @@ static value_t std_eval(value_t* args, lur_t* ctx) {
 #define STD_ERROR_DOC \
 	"msg\nExits the interpreter with an error message."
 
-static value_t std_error(value_t* args, lur_t* ctx) {
+static value_t std_error(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	error(ctx, (const char*)get_text(args[0])->buffer);
 	return make_none();
@@ -5159,14 +5177,14 @@ static value_t std_error(value_t* args, lur_t* ctx) {
 #define STD_TYPE_OF_DOC \
 	"value\nReturns the type of a value. (see type enum)"
 
-static value_t std_type_of(value_t* args, lur_t* ctx) {
+static value_t std_type_of(value_t* args, gluon_t* ctx) {
 	return make_number(args[0].tag);
 }
 
 #define STD_DEFAULT_DOC \
 	"type\nReturns a default value for a given type."
 
-static value_t std_default(value_t* args, lur_t* ctx) {
+static value_t std_default(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int64_t type = (int64_t)get_number(args[0]);
 	switch (type) {
@@ -5193,7 +5211,7 @@ static value_t std_default(value_t* args, lur_t* ctx) {
 	"value\nSerializes the value into text."
 
 static value_t std_serialize(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	return make_text(value_serialize(args[0], ctx));
 }
@@ -5202,7 +5220,7 @@ static value_t std_serialize(
 	"data\nReturns a value decoded from serialized data."
 
 static value_t std_deserialize(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	return value_deserialize(get_text(args[0]), ctx);
@@ -5211,7 +5229,7 @@ static value_t std_deserialize(
 #define STD_AS_NUMBER_DOC \
 	"value\nReturns value converted into a number."
 
-static value_t std_as_number(value_t* args, lur_t* ctx) {
+static value_t std_as_number(value_t* args, gluon_t* ctx) {
 	switch (args[0].tag) {
 	case TYPE_NONE: return make_number(0);
 	case TYPE_BOOL: return make_number(
@@ -5231,14 +5249,14 @@ static value_t std_as_number(value_t* args, lur_t* ctx) {
 #define STD_AS_TEXT_DOC \
 	"value\nReturns value converted into text."
 
-static value_t std_as_text(value_t* args, lur_t* ctx) {
+static value_t std_as_text(value_t* args, gluon_t* ctx) {
 	return make_text(value_to_text(args[0], ctx));
 }
 
 #define STD_ID_DOC \
 	"x\nfun x -> x."
 	
-static value_t std_id(value_t* args, lur_t* ctx) {
+static value_t std_id(value_t* args, gluon_t* ctx) {
 	return args[0];
 }
 
@@ -5246,7 +5264,7 @@ static value_t std_id(value_t* args, lur_t* ctx) {
 	"n fn\nCreates a loop that calls the function fn n "  \
 	"times with the current count as argument ."
 
-static value_t std_loop(value_t* args, lur_t* ctx) {
+static value_t std_loop(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_FREF);
 	double n = get_number(args[0]);
@@ -5254,7 +5272,7 @@ static value_t std_loop(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < n; i++) {
 		value_t args[] = { make_number(i) };
-		lur_call_function(ctx, fref, args, 1);
+		gluon_call_function(ctx, fref, args, 1);
 	}
 	
 	return make_none();
@@ -5263,13 +5281,13 @@ static value_t std_loop(value_t* args, lur_t* ctx) {
 #define STD_WHILE_DOC \
 	"fn\nCalls the function fn repeatedly until it returns false."
 
-static value_t std_while(value_t* args, lur_t* ctx) {
+static value_t std_while(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_FREF);
 	fref_t* fref = get_fref(args[0]);
 	
 	while (true) {
 		value_t args[] = {};
-		value_t result = lur_call_function(ctx, fref, args, 0);
+		value_t result = gluon_call_function(ctx, fref, args, 0);
 		if (result.tag != TYPE_BOOL)
 			error(ctx, ERR_TYPECHECK(
 				result.tag, TYPE_BOOL));
@@ -5285,7 +5303,7 @@ static value_t std_while(value_t* args, lur_t* ctx) {
 	"start end\nCreates an array containing values from " \
 	"start up until end."
 
-static value_t std_range(value_t* args, lur_t* ctx) {
+static value_t std_range(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	int64_t start = (int64_t)get_number(args[0]);
@@ -5300,11 +5318,11 @@ static value_t std_range(value_t* args, lur_t* ctx) {
 	return make_array(array);
 }
 
-#define STD_RANGE_INC_DOC \
+#define STD_IRANGE_DOC \
 	"start end\nCreates an array containing values from " \
 	"start up to and including end."
 
-static value_t std_range_inc(value_t* args, lur_t* ctx) {
+static value_t std_irange(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	int64_t start = (int64_t)get_number(args[0]);
@@ -5323,7 +5341,7 @@ static value_t std_range_inc(value_t* args, lur_t* ctx) {
 	"names\nTakes an array of enum discriminator names " \
 	"and returns a map mapping the names to numbers."
 
-static value_t std_enum(value_t* args, lur_t* ctx) {
+static value_t std_enum(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
 	map_t* enum_ = map_new(ctx);
@@ -5341,7 +5359,7 @@ static value_t std_enum(value_t* args, lur_t* ctx) {
 	"condition\nAsserts that condition is true, otherwise " \
 	"halts with an error message."
 
-static value_t std_assert(value_t* args, lur_t* ctx) {
+static value_t std_assert(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_BOOL);
 	if (!get_bool(args[0])) error(ctx, ERR_ASSERTION);
 	return make_none();
@@ -5364,7 +5382,7 @@ static size_t mem_free_ram(void) {
 	"Returns the pointer address in host memory of an " \
 	"object, or none if the value is not an object type."
 
-static value_t std_mem_addr(value_t* args, lur_t* ctx) {
+static value_t std_mem_addr(value_t* args, gluon_t* ctx) {
 	if (!type_is_obj(args[0].tag))
 		return make_none();
 	return make_text(text_fmt(ctx, "%p", args[0].data.obj));
@@ -5375,7 +5393,7 @@ static value_t std_mem_addr(value_t* args, lur_t* ctx) {
 	"Returns a copied version of the value with a new " \
 	"address."
 
-static value_t std_mem_copy(value_t* args, lur_t* ctx) {
+static value_t std_mem_copy(value_t* args, gluon_t* ctx) {
 	return value_copy(args[0], false, ctx);
 }
 
@@ -5385,7 +5403,7 @@ static value_t std_mem_copy(value_t* args, lur_t* ctx) {
 	"address."
 
 static value_t std_mem_deep_copy(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	return value_copy(args[0], true, ctx);
 }
@@ -5394,7 +5412,7 @@ static value_t std_mem_deep_copy(
 	"Returns the total number of bytes of ram used."
 
 static value_t std_mem_ram(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	return make_number(mem_ram());
 }
@@ -5403,7 +5421,7 @@ static value_t std_mem_ram(
 	"Returns the number of bytes of free ram available."
 
 static value_t std_mem_free_ram(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	return make_number(mem_free_ram());
 }
@@ -5411,7 +5429,7 @@ static value_t std_mem_free_ram(
 #define STD_TIME_NOW_DOC \
 	"Returns the current time and date as text."
 
-static value_t std_time_now(value_t* args, lur_t* ctx) {
+static value_t std_time_now(value_t* args, gluon_t* ctx) {
 	time_t current_time;
 	time(&current_time);
 	const char* str = ctime(&current_time);
@@ -5421,7 +5439,7 @@ static value_t std_time_now(value_t* args, lur_t* ctx) {
 #define STD_TIME_YEAR_DOC \
 	"Returns the current year."
 
-static value_t std_time_year(value_t* args, lur_t* ctx) {
+static value_t std_time_year(value_t* args, gluon_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_year + 1900);
@@ -5430,7 +5448,7 @@ static value_t std_time_year(value_t* args, lur_t* ctx) {
 #define STD_TIME_MONTH_DOC \
 	"Returns the current month."
 
-static value_t std_time_month(value_t* args, lur_t* ctx) {
+static value_t std_time_month(value_t* args, gluon_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_mon + 1);
@@ -5439,7 +5457,7 @@ static value_t std_time_month(value_t* args, lur_t* ctx) {
 #define STD_TIME_DAY_DOC \
 	"Returns the current day."
 
-static value_t std_time_day(value_t* args, lur_t* ctx) {
+static value_t std_time_day(value_t* args, gluon_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_mday);
@@ -5448,7 +5466,7 @@ static value_t std_time_day(value_t* args, lur_t* ctx) {
 #define STD_TIME_HOUR_DOC \
 	"Returns the current hour."
 
-static value_t std_time_hour(value_t* args, lur_t* ctx) {
+static value_t std_time_hour(value_t* args, gluon_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_hour);
@@ -5457,7 +5475,7 @@ static value_t std_time_hour(value_t* args, lur_t* ctx) {
 #define STD_TIME_MINUTE_DOC \
 	"Returns the current minute."
 
-static value_t std_time_minute(value_t* args, lur_t* ctx) {
+static value_t std_time_minute(value_t* args, gluon_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_min);
@@ -5466,7 +5484,7 @@ static value_t std_time_minute(value_t* args, lur_t* ctx) {
 #define STD_TIME_SECOND_DOC \
 	"Returns the current second."
 
-static value_t std_time_second(value_t* args, lur_t* ctx) {
+static value_t std_time_second(value_t* args, gluon_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_number(t->tm_sec);
@@ -5475,7 +5493,7 @@ static value_t std_time_second(value_t* args, lur_t* ctx) {
 #define STD_TIME_IS_DST_DOC \
 	"Returns true if it is currently daylight savings time."
 	
-static value_t std_time_is_dst(value_t* args, lur_t* ctx) {
+static value_t std_time_is_dst(value_t* args, gluon_t* ctx) {
 	time_t now = time(NULL);
 	struct tm* t = localtime(&now);
 	return make_bool(t->tm_isdst);
@@ -5485,7 +5503,7 @@ static value_t std_time_is_dst(value_t* args, lur_t* ctx) {
 	"Returns a timestamp measured in seconds."
 
 static value_t std_time_timestamp(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	return make_number(time(NULL));
 }
@@ -5493,7 +5511,7 @@ static value_t std_time_timestamp(
 #define STD_TIME_CLOCK_DOC \
 	"Returns the CPU clock time in seconds."
 
-static value_t std_time_clock(value_t* args, lur_t* ctx) {
+static value_t std_time_clock(value_t* args, gluon_t* ctx) {
 	return make_number((double)clock() /
 		CLOCKS_PER_SEC);
 }
@@ -5502,7 +5520,7 @@ static value_t std_time_clock(value_t* args, lur_t* ctx) {
 	"seconds\nSleeps the current thread for x number of " \
 	"seconds."
 
-static value_t std_time_sleep(value_t* args, lur_t* ctx) {
+static value_t std_time_sleep(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	double secs = get_number(args[0]) * 1000.0 * 1000.0;
 	usleep(secs);
@@ -5531,7 +5549,7 @@ static const char* system_get_platform(void) {
 	"Returns the system uptime."
 
 static value_t std_system_uptime(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	struct sysinfo info;
 	sysinfo(&info);
@@ -5549,7 +5567,7 @@ static size_t system_average_load(void) {
 	"Returns the average load over the last minute."
 
 static value_t std_system_average_load(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	return make_number(system_average_load());
 }
@@ -5558,7 +5576,7 @@ static value_t std_system_average_load(
 	"Returns the current process count."
 
 static value_t std_system_process_count(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	struct sysinfo info;
 	sysinfo(&info);
@@ -5568,7 +5586,7 @@ static value_t std_system_process_count(
 #define STD_SYSTEM_CMD_DOC \
 	"cmd\nRuns a command."
 
-static value_t std_system_cmd(value_t* args, lur_t* ctx) {
+static value_t std_system_cmd(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	system((const char*)get_text(args[0])->buffer);
 	return make_none();
@@ -5577,7 +5595,7 @@ static value_t std_system_cmd(value_t* args, lur_t* ctx) {
 #define STD_SYSTEM_EXIT_DOC \
 	"code\nExits the interpreter with an exit code."
 
-static value_t std_system_exit(value_t* args, lur_t* ctx) {
+static value_t std_system_exit(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	exit(get_number(args[0]));
 }
@@ -5591,7 +5609,7 @@ static double math_rand(double start, double end) {
 	"a b epsilon\nCompares two numbers with a " \
 	"tolerance of epsilon."
 
-static value_t std_math_eqf(value_t* args, lur_t* ctx) {
+static value_t std_math_eqf(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
@@ -5605,7 +5623,7 @@ static value_t std_math_eqf(value_t* args, lur_t* ctx) {
 #define STD_MATH_BIT_SHL_DOC \
 	"a b\nBitshifts a b positions to the left."
 
-static value_t std_math_bit_shl(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_shl(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -5614,9 +5632,9 @@ static value_t std_math_bit_shl(value_t* args, lur_t* ctx) {
 }
 
 #define STD_MATH_BIT_SHR_DOC \
-	"a b\nbBtshifts a b positions to the right."
+	"a b\nBitshifts a b positions to the right."
 
-static value_t std_math_bit_shr(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_shr(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -5627,7 +5645,7 @@ static value_t std_math_bit_shr(value_t* args, lur_t* ctx) {
 #define STD_MATH_BIT_AND_DOC \
 	"a b\nPerforms a bitwise AND between a and b."
 
-static value_t std_math_bit_and(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_and(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -5638,7 +5656,7 @@ static value_t std_math_bit_and(value_t* args, lur_t* ctx) {
 #define STD_MATH_BIT_OR_DOC \
 	"a b\nPerforms a bitwise OR between a and b."
 
-static value_t std_math_bit_or(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_or(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -5649,7 +5667,7 @@ static value_t std_math_bit_or(value_t* args, lur_t* ctx) {
 #define STD_MATH_BIT_XOR_DOC \
 	"a b\nPerforms a bitwise XOR between a and b."
 
-static value_t std_math_bit_xor(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_xor(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	uint64_t a = (uint64_t)get_number(args[0]);
@@ -5660,7 +5678,7 @@ static value_t std_math_bit_xor(value_t* args, lur_t* ctx) {
 #define STD_MATH_BIT_NOT_DOC \
 	"x\nPerforms a bitwise NOT on x."
 
-static value_t std_math_bit_not(value_t* args, lur_t* ctx) {
+static value_t std_math_bit_not(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(
 		~((int64_t)get_number(args[0])));
@@ -5670,7 +5688,7 @@ static value_t std_math_bit_not(value_t* args, lur_t* ctx) {
 	"target base\nReturns the number needed to raise " \
 	"base to target."
 
-static value_t std_math_log(value_t* args, lur_t* ctx) {
+static value_t std_math_log(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	double target = get_number(args[0]);
@@ -5681,7 +5699,7 @@ static value_t std_math_log(value_t* args, lur_t* ctx) {
 #define STD_MATH_SQRT_DOC \
 	"x\nReturns the square root of x."
 
-static value_t std_math_sqrt(value_t* args, lur_t* ctx) {
+static value_t std_math_sqrt(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(sqrt(get_number(args[0])));
 }
@@ -5690,7 +5708,7 @@ static value_t std_math_sqrt(value_t* args, lur_t* ctx) {
 	"x\nReturns x * x."
 
 static value_t std_math_squared(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_NUMBER);
 	double x = get_number(args[0]);
@@ -5700,7 +5718,7 @@ static value_t std_math_squared(
 #define STD_MATH_ABS_DOC \
 	"x\nReturns the absolute (positive) value of x."
 
-static value_t std_math_abs(value_t* args, lur_t* ctx) {
+static value_t std_math_abs(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(fabs(get_number(args[0])));
 }
@@ -5708,7 +5726,7 @@ static value_t std_math_abs(value_t* args, lur_t* ctx) {
 #define STD_MATH_MIN_DOC \
 	"a b\nReturns the smaller value of a and b."
 
-static value_t std_math_min(value_t* args, lur_t* ctx) {
+static value_t std_math_min(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	double a = get_number(args[0]);
@@ -5719,7 +5737,7 @@ static value_t std_math_min(value_t* args, lur_t* ctx) {
 #define STD_MATH_MAX_DOC \
 	"a b\nReturns the larger value of a and b."
 
-static value_t std_math_max(value_t* args, lur_t* ctx) {
+static value_t std_math_max(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	double a = get_number(args[0]);
@@ -5730,7 +5748,7 @@ static value_t std_math_max(value_t* args, lur_t* ctx) {
 #define STD_MATH_CLIP_DOC \
 	"x lo hi\nClamps x between lo and hi."
 
-static value_t std_math_clip(value_t* args, lur_t* ctx) {
+static value_t std_math_clip(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
@@ -5740,10 +5758,10 @@ static value_t std_math_clip(value_t* args, lur_t* ctx) {
 	return make_number((x < lo) ? lo : (x > hi) ? hi : x);
 }
 
-#define STD_MATH_LERP_DOC \
+#define STD_MATH_MIX_DOC \
 	"t a b\nLinearly interpolates between a and b based on t."
 
-static value_t std_math_lerp(value_t* args, lur_t* ctx) {
+static value_t std_math_mix(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
@@ -5758,7 +5776,7 @@ static value_t std_math_lerp(value_t* args, lur_t* ctx) {
 	"towards target based on speed and dt."
 
 static value_t std_math_interp_to(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
@@ -5776,7 +5794,7 @@ static value_t std_math_interp_to(
 #define STD_MATH_FLOOR_DOC \
 	"x\nRounds towards -inf."
 
-static value_t std_math_floor(value_t* args, lur_t* ctx) {
+static value_t std_math_floor(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(floor(get_number(args[0])));
 }
@@ -5784,7 +5802,7 @@ static value_t std_math_floor(value_t* args, lur_t* ctx) {
 #define STD_MATH_CEIL_DOC \
 	"x\nRounds towards +inf."
 
-static value_t std_math_ceil(value_t* args, lur_t* ctx) {
+static value_t std_math_ceil(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(ceil(get_number(args[0])));
 }
@@ -5792,7 +5810,7 @@ static value_t std_math_ceil(value_t* args, lur_t* ctx) {
 #define STD_MATH_ROUND_DOC \
 	"x\nRounds x to the nearest integer."
 
-static value_t std_math_round(value_t* args, lur_t* ctx) {
+static value_t std_math_round(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(round(get_number(args[0])));
 }
@@ -5800,7 +5818,7 @@ static value_t std_math_round(value_t* args, lur_t* ctx) {
 #define STD_MATH_RAD_DOC \
 	"x\nConverts degrees to radians."
 
-static value_t std_math_rad(value_t* args, lur_t* ctx) {
+static value_t std_math_rad(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(
 		get_number(args[0]) * (M_PI / 180.0));
@@ -5809,7 +5827,7 @@ static value_t std_math_rad(value_t* args, lur_t* ctx) {
 #define STD_MATH_DEG_DOC \
 	"x\nConverts radians to degrees."
 
-static value_t std_math_deg(value_t* args, lur_t* ctx) {
+static value_t std_math_deg(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(
 		get_number(args[0]) * (180.0 / M_PI));
@@ -5818,7 +5836,7 @@ static value_t std_math_deg(value_t* args, lur_t* ctx) {
 #define STD_MATH_SIN_DOC \
 	"x\nReturns the sine of x."
 
-static value_t std_math_sin(value_t* args, lur_t* ctx) {
+static value_t std_math_sin(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(sin(get_number(args[0])));
 }
@@ -5826,7 +5844,7 @@ static value_t std_math_sin(value_t* args, lur_t* ctx) {
 #define STD_MATH_COS_DOC \
 	"x\nReturns the cosine of x."
 
-static value_t std_math_cos(value_t* args, lur_t* ctx) {
+static value_t std_math_cos(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(cos(get_number(args[0])));
 }
@@ -5834,7 +5852,7 @@ static value_t std_math_cos(value_t* args, lur_t* ctx) {
 #define STD_MATH_TAN_DOC \
 	"x\nReturns the tangent of x."
 
-static value_t std_math_tan(value_t* args, lur_t* ctx) {
+static value_t std_math_tan(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(tan(get_number(args[0])));
 }
@@ -5842,7 +5860,7 @@ static value_t std_math_tan(value_t* args, lur_t* ctx) {
 #define STD_MATH_ASIN_DOC \
 	"x\nReturns the arcsine of x."
 
-static value_t std_math_asin(value_t* args, lur_t* ctx) {
+static value_t std_math_asin(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(asin(get_number(args[0])));
 }
@@ -5850,7 +5868,7 @@ static value_t std_math_asin(value_t* args, lur_t* ctx) {
 #define STD_MATH_ACOS_DOC \
 	"x\nReturns the arccosine of x."
 
-static value_t std_math_acos(value_t* args, lur_t* ctx) {
+static value_t std_math_acos(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(acos(get_number(args[0])));
 }
@@ -5858,7 +5876,7 @@ static value_t std_math_acos(value_t* args, lur_t* ctx) {
 #define STD_MATH_ATAN_DOC \
 	"x\nReturns the arctangent of x."
 
-static value_t std_math_atan(value_t* args, lur_t* ctx) {
+static value_t std_math_atan(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(atan(get_number(args[0])));
 }
@@ -5866,7 +5884,7 @@ static value_t std_math_atan(value_t* args, lur_t* ctx) {
 #define STD_MATH_ATAN2_DOC \
 	"x y\nTwo argument arctangent."
 
-static value_t std_math_atan2(value_t* args, lur_t* ctx) {
+static value_t std_math_atan2(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	double x = get_number(args[0]);
@@ -5877,7 +5895,7 @@ static value_t std_math_atan2(value_t* args, lur_t* ctx) {
 #define STD_MATH_SINH_DOC \
 	"x\nReturns the hyperbolic sine of x."
 
-static value_t std_math_sinh(value_t* args, lur_t* ctx) {
+static value_t std_math_sinh(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(sinh(get_number(args[0])));
 }
@@ -5885,7 +5903,7 @@ static value_t std_math_sinh(value_t* args, lur_t* ctx) {
 #define STD_MATH_COSH_DOC \
 	"x\nReturns the hyperbolic cosine of x."
 
-static value_t std_math_cosh(value_t* args, lur_t* ctx) {
+static value_t std_math_cosh(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(cosh(get_number(args[0])));
 }
@@ -5893,7 +5911,7 @@ static value_t std_math_cosh(value_t* args, lur_t* ctx) {
 #define STD_MATH_TANH_DOC \
 	"x\nReturns the hyperbolic tangent of x."
 
-static value_t std_math_tanh(value_t* args, lur_t* ctx) {
+static value_t std_math_tanh(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(tanh(get_number(args[0])));
 }
@@ -5901,7 +5919,7 @@ static value_t std_math_tanh(value_t* args, lur_t* ctx) {
 #define STD_MATH_ASINH_DOC \
 	"x\nReturns the hyperbolic arcsine of x."
 
-static value_t std_math_asinh(value_t* args, lur_t* ctx) {
+static value_t std_math_asinh(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(asinh(get_number(args[0])));
 }
@@ -5909,7 +5927,7 @@ static value_t std_math_asinh(value_t* args, lur_t* ctx) {
 #define STD_MATH_ACOSH_DOC \
 	"x\nReturns the hyperbolic arccosine of x."
 
-static value_t std_math_acosh(value_t* args, lur_t* ctx) {
+static value_t std_math_acosh(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(acosh(get_number(args[0])));
 }
@@ -5917,7 +5935,7 @@ static value_t std_math_acosh(value_t* args, lur_t* ctx) {
 #define STD_MATH_ATANH_DOC \
 	"x\nReturns the hyperbolic arctangent of x."
 
-static value_t std_math_atanh(value_t* args, lur_t* ctx) {
+static value_t std_math_atanh(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_number(atanh(get_number(args[0])));
 }
@@ -5925,7 +5943,7 @@ static value_t std_math_atanh(value_t* args, lur_t* ctx) {
 #define STD_MATH_IS_EVEN_DOC \
 	"x\nReturns true if x is even."
 
-static value_t std_math_is_even(value_t* args, lur_t* ctx)  {
+static value_t std_math_is_even(value_t* args, gluon_t* ctx)  {
 	typecheck(0, TYPE_NUMBER);
 	return make_bool(fmod(
 		get_number(args[0]), 2.0) == 0.0);
@@ -5934,7 +5952,7 @@ static value_t std_math_is_even(value_t* args, lur_t* ctx)  {
 #define STD_MATH_IS_ODD_DOC \
 	"x\nReturns true if x is odd."
 
-static value_t std_math_is_odd(value_t* args, lur_t* ctx) {
+static value_t std_math_is_odd(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_bool(fmod(
 		get_number(args[0]), 2.0) != 0.0);
@@ -5943,7 +5961,7 @@ static value_t std_math_is_odd(value_t* args, lur_t* ctx) {
 #define STD_MATH_IS_PRIME_DOC \
 	"x\nReturns true if x is prime."
 
-static value_t std_math_is_prime(value_t* args, lur_t* ctx) {
+static value_t std_math_is_prime(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	uint64_t number = (uint64_t)get_number(args[0]);
 	if (number <= 1) return make_bool(false);
@@ -5957,7 +5975,7 @@ static value_t std_math_is_prime(value_t* args, lur_t* ctx) {
 #define STD_MATH_HEX_DOC \
 	"x\nReturns x as a hexidecimal string."
 
-static value_t std_math_hex(value_t* args, lur_t* ctx) {
+static value_t std_math_hex(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	return make_text(text_fmt(
 		ctx, "0x%x", (int64_t)get_number(args[0])));
@@ -5966,7 +5984,7 @@ static value_t std_math_hex(value_t* args, lur_t* ctx) {
 #define STD_MATH_BIN_DOC \
 	"x\nReturns x as a binary string."
 
-static value_t std_math_bin(value_t* args, lur_t* ctx) {
+static value_t std_math_bin(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int num = get_number(args[0]);
 	
@@ -5983,14 +6001,14 @@ static value_t std_math_bin(value_t* args, lur_t* ctx) {
 #define STD_MATH_HASH_DOC \
 	"value\nReturns the FNV-1a hash of the value."
 
-static value_t std_math_hash(value_t* args, lur_t* ctx) {
+static value_t std_math_hash(value_t* args, gluon_t* ctx) {
 	return make_number(value_hash(args[0], ctx));
 }
 
 #define STD_VEC_SIZE_DOC \
 	"v\nReturns the magnitude of v."
 
-static value_t std_vec_size(value_t* args, lur_t* ctx) {
+static value_t std_vec_size(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* vec = get_array(args[0]);
 	
@@ -6007,10 +6025,30 @@ static value_t std_vec_size(value_t* args, lur_t* ctx) {
 	return make_number(sqrt(size));
 }
 
+#define STD_VEC_SIZE2_DOC \
+	"v\nReturns the squared magnitude of v."
+
+static value_t std_vec_size2(value_t* args, gluon_t* ctx) {
+	typecheck(0, TYPE_ARRAY);
+	const array_t* vec = get_array(args[0]);
+	
+	double size = 0.0;
+	for (size_t i = 0; i < vec->len; i++) {
+		if (vec->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(
+				vec->items[i].tag, TYPE_NUMBER));
+		
+		double number = get_number(vec->items[i]);
+		size += number * number;
+	}
+	
+	return make_number(size);
+}
+
 #define STD_VEC_NORM_DOC \
 	"v\nReturns a normalized copy of v."
 
-static value_t std_vec_norm(value_t* args, lur_t* ctx) {
+static value_t std_vec_norm(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* vec = get_array(args[0]);
 	array_t* out = array_copy(vec, false, ctx);
@@ -6040,7 +6078,7 @@ static value_t std_vec_norm(value_t* args, lur_t* ctx) {
 #define STD_VEC_DOT_DOC \
 	"v1 v2\nReturns the dot product of v1 and v2."
 
-static value_t std_vec_dot(value_t* args, lur_t* ctx) {
+static value_t std_vec_dot(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_ARRAY);
 	const array_t* a = get_array(args[0]);
@@ -6067,7 +6105,7 @@ static value_t std_vec_dot(value_t* args, lur_t* ctx) {
 #define STD_VEC_CROSS_DOC \
 	"v1 v2\nReturns the cross product of v1 and v2."
 
-static value_t std_vec_cross(value_t* args, lur_t* ctx) {
+static value_t std_vec_cross(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_ARRAY);
 	const array_t* a = get_array(args[0]);
@@ -6106,11 +6144,103 @@ static value_t std_vec_cross(value_t* args, lur_t* ctx) {
 	return make_array(out);
 }
 
+#define STD_VEC_DISTANCE_DOC \
+	"v1 v2\nReturns the distance between v1 and v2."
+
+static value_t std_vec_distance(
+	value_t* args, gluon_t* ctx)
+{
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_ARRAY);
+	array_t* v1 = get_array(args[0]);
+	array_t* v2 = get_array(args[1]);
+	float distance = 0.0;
+	
+	size_t shortest = (v1->len < v2->len) ? v1->len : v2->len;
+	for (size_t i = 0; i < shortest; i++) {
+		if (v1->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(
+				v1->items[i].tag, TYPE_NUMBER));
+		if (v2->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(
+				v2->items[i].tag, TYPE_NUMBER));
+		
+		double number = get_number(v1->items[i]) -
+			get_number(v2->items[i]);
+		distance += number * number;
+	}
+	
+	return make_number(sqrt(distance));
+}
+
+#define STD_VEC_DISTANCE2_DOC \
+	"v1 v2\nReturns the squared distance between v1 and v2."
+
+static value_t std_vec_distance2(
+	value_t* args, gluon_t* ctx)
+{
+	typecheck(0, TYPE_ARRAY);
+	typecheck(1, TYPE_ARRAY);
+	array_t* v1 = get_array(args[0]);
+	array_t* v2 = get_array(args[1]);
+	float distance = 0.0;
+	
+	size_t shortest = (v1->len < v2->len) ? v1->len : v2->len;
+	for (size_t i = 0; i < shortest; i++) {
+		if (v1->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(
+				v1->items[i].tag, TYPE_NUMBER));
+		if (v2->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(
+				v2->items[i].tag, TYPE_NUMBER));
+		
+		double number = get_number(v1->items[i]) -
+			get_number(v2->items[i]);
+		distance += number * number;
+	}
+	
+	return make_number(distance);
+}
+
+#define STD_VEC_MIX_DOC \
+	"t v1 v2\nLinearly interpolates between v1 and v2 " \
+	"based on t."
+	
+static value_t std_vec_mix(value_t* args, gluon_t* ctx) {
+	typecheck(0, TYPE_NUMBER);
+	typecheck(1, TYPE_ARRAY);
+	typecheck(2, TYPE_ARRAY);
+	double t = get_number(args[0]);
+	const array_t* v1 = get_array(args[1]);
+	const array_t* v2 = get_array(args[2]);
+	array_t* result = array_new(ctx);
+	
+	size_t shortest = (v1->len < v2->len) ? v1->len : v2->len;
+	for (size_t i = 0; i < shortest; i++) {
+		if (v1->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(
+				v1->items[i].tag, TYPE_NUMBER));
+		if (v2->items[i].tag != TYPE_NUMBER)
+			error(ctx, ERR_TYPECHECK(
+				v2->items[i].tag, TYPE_NUMBER));
+		
+		double a = get_number(v1->items[i]);
+		double b = get_number(v2->items[i]);
+		array_push(result,
+			make_number(a * (1.0 - t) + b * t),
+			ctx);
+	}
+	
+	return make_array(result);
+}
+
 #define STD_VEC_INTERP_TO_DOC \
 	"v1 v2 speed dt\nInterpolates v1 towards v2 based on " \
 	"speed and dt."
 
-static value_t std_vec_interp_to(value_t* args, lur_t* ctx) {
+static value_t std_vec_interp_to(
+	value_t* args, gluon_t* ctx)
+{
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_ARRAY);
 	typecheck(2, TYPE_NUMBER);
@@ -6145,7 +6275,7 @@ static value_t std_vec_interp_to(value_t* args, lur_t* ctx) {
 #define STD_RAND_SEED_DOC \
 	"seed\nSeeds the random number generator."
 
-static value_t std_rand_seed(value_t* args, lur_t* ctx) {
+static value_t std_rand_seed(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	srand(get_number(args[0]));
 	return make_none();
@@ -6155,7 +6285,9 @@ static value_t std_rand_seed(value_t* args, lur_t* ctx) {
 	"min max\nReturns a random number between " \
 	"min and max."
 
-static value_t std_rand_number(value_t* args, lur_t* ctx) {
+static value_t std_rand_number(
+	value_t* args, gluon_t* ctx)
+{
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	return make_number(math_rand(
@@ -6167,7 +6299,7 @@ static value_t std_rand_number(value_t* args, lur_t* ctx) {
 	"len charset\nGenerates a random string of characters " \
 	"from charset len characters long."
 
-static value_t std_rand_text(value_t* args, lur_t* ctx) {
+static value_t std_rand_text(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_TEXT);
 	size_t length = (size_t)get_number(args[0]);
@@ -6185,7 +6317,7 @@ static value_t std_rand_text(value_t* args, lur_t* ctx) {
 #define STD_RAND_ITEM_DOC \
 	"array\nReturns a random item from the array."
 
-static value_t std_rand_item(value_t* args, lur_t* ctx) {
+static value_t std_rand_item(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
 	if (array->len == 0) return make_none();
@@ -6196,7 +6328,7 @@ static value_t std_rand_item(value_t* args, lur_t* ctx) {
 	"Returns a normalized 3D vector containing a " \
 	"random direction."
 	
-static value_t std_rand_dir(value_t* args, lur_t* ctx) {
+static value_t std_rand_dir(value_t* args, gluon_t* ctx) {
 	array_t* vec = array_new(ctx);
 	array_push(vec,
 		make_number(math_rand(-1.0, 1.0)), ctx);
@@ -6226,7 +6358,7 @@ static value_t std_rand_dir(value_t* args, lur_t* ctx) {
 #define STD_TEXT_LEN_DOC \
 	"text\nReturns the length of the text."
 
-static value_t std_text_len(value_t* args, lur_t* ctx) {
+static value_t std_text_len(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	return make_number(get_text(args[0])->len);
 }
@@ -6235,7 +6367,7 @@ static value_t std_text_len(value_t* args, lur_t* ctx) {
 	"text\nReturns an array containing the characters that " \
 	"make up a string."
 
-static value_t std_text_bytes(value_t* args, lur_t* ctx) {
+static value_t std_text_bytes(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
 	array_t* bytes = array_new(ctx);
@@ -6249,7 +6381,7 @@ static value_t std_text_bytes(value_t* args, lur_t* ctx) {
 	"text\nReturns an array containing the ASCII values of " \
 	"a string."
 
-static value_t std_text_ascii(value_t* args, lur_t* ctx) {
+static value_t std_text_ascii(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
 	array_t* ascii = array_new(ctx);
@@ -6262,7 +6394,7 @@ static value_t std_text_ascii(value_t* args, lur_t* ctx) {
 	"text delim\nSplits the text into words based on a " \	
 	"delimiter."
 
-static value_t std_text_words(value_t* args, lur_t* ctx) {
+static value_t std_text_words(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	
@@ -6286,7 +6418,7 @@ static value_t std_text_words(value_t* args, lur_t* ctx) {
 	"text start end\nReturns a substring based on indices " \
 	"start and end."
 
-static value_t std_text_slice(value_t* args, lur_t* ctx) {
+static value_t std_text_slice(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
@@ -6310,7 +6442,7 @@ static value_t std_text_slice(value_t* args, lur_t* ctx) {
 #define STD_TEXT_REPEAT_DOC \
 	"text n\nRepeats text n times."
 
-static value_t std_text_repeat(value_t* args, lur_t* ctx) {
+static value_t std_text_repeat(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_NUMBER);
 	return make_text(text_repeat(get_text(args[0]),
@@ -6321,7 +6453,7 @@ static value_t std_text_repeat(value_t* args, lur_t* ctx) {
 	"text\nReturns text converted to uppercase."
 
 static value_t std_text_as_upper(
-	value_t* args, lur_t* ctx) 
+	value_t* args, gluon_t* ctx) 
 {
 	typecheck(0, TYPE_TEXT);
 	const text_t* original = get_text(args[0]);
@@ -6335,7 +6467,7 @@ static value_t std_text_as_upper(
 	"text\nReturns text converted to lowercase."
 
 static value_t std_text_as_lower(
-	value_t* args, lur_t* ctx) 
+	value_t* args, gluon_t* ctx) 
 {
 	typecheck(0, TYPE_TEXT);
 	const text_t* original = get_text(args[0]);
@@ -6349,7 +6481,7 @@ static value_t std_text_as_lower(
 	"text\nReturns true if the text is entirely lowercase."
 
 static value_t std_text_is_lower(
-	value_t* args, lur_t* ctx) 
+	value_t* args, gluon_t* ctx) 
 {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
@@ -6363,7 +6495,7 @@ static value_t std_text_is_lower(
 	"text\nReturns true if the text is entirely uppercase."
 
 static value_t std_text_is_upper(
-	value_t* args, lur_t* ctx) 
+	value_t* args, gluon_t* ctx) 
 {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
@@ -6377,7 +6509,7 @@ static value_t std_text_is_upper(
 	"text start\nReturns true if text starts with start."
 
 static value_t std_text_starts_with(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
@@ -6395,7 +6527,7 @@ static value_t std_text_starts_with(
 	"text end\nReturns true if text ends with end."
 
 static value_t std_text_ends_with(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
@@ -6414,7 +6546,7 @@ static value_t std_text_ends_with(
 	"text\nStrips whitespace off the start of the text."
 
 static value_t std_text_trim_left(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
@@ -6432,7 +6564,7 @@ static value_t std_text_trim_left(
 	"text\nStrips whitespace off the end of the text."
 
 static value_t std_text_trim_right(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	const text_t* text = get_text(args[0]);
@@ -6449,7 +6581,7 @@ static value_t std_text_trim_right(
 #define STD_TEXT_TRIM_DOC \
 	"text\nStrips whitespace off both ends of the text."
 
-static value_t std_text_trim(value_t* args, lur_t* ctx) {
+static value_t std_text_trim(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	value_t text = args[0];
 	text = std_text_trim_left(&text, ctx);
@@ -6462,7 +6594,7 @@ static value_t std_text_trim(value_t* args, lur_t* ctx) {
 	"that it is width characters long."
 
 static value_t std_text_left_pad(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_NUMBER);
@@ -6483,7 +6615,7 @@ static value_t std_text_left_pad(
 	"that it is width characters long."
 
 static value_t std_text_right_pad(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_NUMBER);
@@ -6503,7 +6635,7 @@ static value_t std_text_right_pad(
 	"text width pattern\nPads the center of the text so " \
 	"that it is width characters long."
 
-static value_t std_text_pad(value_t* args, lur_t* ctx) {
+static value_t std_text_pad(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_TEXT);
@@ -6525,7 +6657,7 @@ static value_t std_text_pad(value_t* args, lur_t* ctx) {
 	"text find start\nFinds the text find within the text after " \
 	"position start."
 
-static value_t std_text_find(value_t* args, lur_t* ctx) {
+static value_t std_text_find(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	typecheck(2, TYPE_NUMBER);
@@ -6540,7 +6672,7 @@ static value_t std_text_find(value_t* args, lur_t* ctx) {
 	"text find with\nReplaces all occurences of find within " \
 	"text with with."
 
-static value_t std_text_replace_all(value_t* args, lur_t* ctx)
+static value_t std_text_replace_all(value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
@@ -6556,7 +6688,7 @@ static value_t std_text_replace_all(value_t* args, lur_t* ctx)
 	"a b\nCalculates the edit distance between two strings."
 
 static value_t std_text_edit_dist(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
@@ -6568,7 +6700,7 @@ static value_t std_text_edit_dist(
 	"a b\nReturns the ratio of text match amount " \
 	"between a and b."
 
-static value_t std_text_ratio(value_t* args, lur_t* ctx) {
+static value_t std_text_ratio(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	const text_t* a = get_text(args[0]);
@@ -6581,14 +6713,14 @@ static value_t std_text_ratio(value_t* args, lur_t* ctx) {
 #define STD_TEXT_TITLE_DOC \
 	"text\nReturns text in title case."
 	
-static value_t std_text_title(value_t* args, lur_t* ctx) {
+static value_t std_text_title(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* original = get_text(args[0]);
 	text_t* text = text_copy(original, ctx);
 	if (text->len == 0) return make_text(
 		text_new(NULL, 0, ctx));
 	
-	const char* delim = " _.-+";
+	const char* delim = " _.-+/\\";
 	char* token = strtok(text->buffer, delim);
 	
 	text_t* result = text_new(NULL, 0, ctx);
@@ -6607,7 +6739,7 @@ static value_t std_text_title(value_t* args, lur_t* ctx) {
 #define STD_ARRAY_LEN_DOC \
 	"array\nReturns the length of the array."
 
-static value_t std_array_len(value_t* args, lur_t* ctx) {
+static value_t std_array_len(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_number(get_array(args[0])->len);
 }
@@ -6616,7 +6748,7 @@ static value_t std_array_len(value_t* args, lur_t* ctx) {
 	"array index\nReturns the item at the nth position " \
 	"within the array."
 
-static value_t std_array_get(value_t* args, lur_t* ctx) {
+static value_t std_array_get(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	array_t* array = get_array(args[0]);
@@ -6629,7 +6761,7 @@ static value_t std_array_get(value_t* args, lur_t* ctx) {
 	"array index value\nSets the item at the nth position " \
 	"within the array."
 
-static value_t std_array_set(value_t* args, lur_t* ctx) {
+static value_t std_array_set(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
 	size_t index = array_convert_index(
@@ -6642,7 +6774,7 @@ static value_t std_array_set(value_t* args, lur_t* ctx) {
 	"array index item\nInserts item into the array at the " \
 	"given index."
 
-static value_t std_array_insert(value_t* args, lur_t* ctx) {
+static value_t std_array_insert(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	array_t* array = get_array(args[0]);
@@ -6659,7 +6791,7 @@ static value_t std_array_insert(value_t* args, lur_t* ctx) {
 	"array index\nDeletes the item at the provided index " \
 	"from the array."
 
-static value_t std_array_delete(value_t* args, lur_t* ctx) {
+static value_t std_array_delete(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	array_t* array = get_array(args[0]);
@@ -6673,7 +6805,7 @@ static value_t std_array_delete(value_t* args, lur_t* ctx) {
 	"array\nDeletes the last item from the array and " \
 	"returns it."
 
-static value_t std_array_pop(value_t* args, lur_t* ctx) {
+static value_t std_array_pop(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return array_pop(get_array(args[0]), ctx);
 }
@@ -6681,7 +6813,7 @@ static value_t std_array_pop(value_t* args, lur_t* ctx) {
 #define STD_ARRAY_HEAD_DOC \
 	"array\nReturns the first item in the array."
 
-static value_t std_array_head(value_t* args, lur_t* ctx) {
+static value_t std_array_head(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
@@ -6692,7 +6824,7 @@ static value_t std_array_head(value_t* args, lur_t* ctx) {
 #define STD_ARRAY_TAIL_DOC \
 	"array\nReturns all but the first item of the array."
 
-static value_t std_array_tail(value_t* args, lur_t* ctx) {
+static value_t std_array_tail(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
@@ -6705,7 +6837,7 @@ static value_t std_array_tail(value_t* args, lur_t* ctx) {
 #define STD_ARRAY_LAST_DOC \
 	"array\nReturns the last item in the array."
 
-static value_t std_array_last(value_t* args, lur_t* ctx) {
+static value_t std_array_last(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	if (array->len == 0)
@@ -6717,7 +6849,7 @@ static value_t std_array_last(value_t* args, lur_t* ctx) {
 	"n fn\nFills the array with n values returned from fn, " \
 	"with fn taking the current count as argument."
 
-static value_t std_array_fill(value_t* args, lur_t* ctx) {
+static value_t std_array_fill(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_FREF);
 	size_t n = get_number(args[0]);
@@ -6725,7 +6857,7 @@ static value_t std_array_fill(value_t* args, lur_t* ctx) {
 	array_t* array = array_new(ctx);
 	for (size_t i = 0; i < n; i++) {
 		value_t args[] = { make_number(i) };
-		value_t item = lur_call_function(ctx, fref, args, 1);
+		value_t item = gluon_call_function(ctx, fref, args, 1);
 		array_push(array, item, ctx);
 	}
 	return make_array(array);
@@ -6735,7 +6867,7 @@ static value_t std_array_fill(value_t* args, lur_t* ctx) {
 	"rep n\nReturns an array that contains the items " \
 	"in rep repeated n times."
 
-static value_t std_array_repeat(value_t* args, lur_t* ctx) {
+static value_t std_array_repeat(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	const array_t* array = get_array(args[0]);
@@ -6747,7 +6879,7 @@ static value_t std_array_repeat(value_t* args, lur_t* ctx) {
 	"array amount\nUse negative amounts to rotate to " \
 	"the left and positive amounts to rotate to the right."
 
-static value_t std_array_rotate(value_t* args, lur_t* ctx) {
+static value_t std_array_rotate(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	const array_t* array = get_array(args[0]);
@@ -6762,7 +6894,7 @@ static value_t std_array_rotate(value_t* args, lur_t* ctx) {
 	"array value\nCounts how many times a value appears " \
 	"in the array."
 
-static value_t std_array_count(value_t* args, lur_t* ctx) {
+static value_t std_array_count(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	size_t count = 0;
@@ -6775,7 +6907,7 @@ static value_t std_array_count(value_t* args, lur_t* ctx) {
 #define STD_ARRAY_CONTAINS_DOC \
 	"array value\nReturns true if the array contains value."
 
-static value_t std_array_contains(value_t* args, lur_t* ctx) {
+static value_t std_array_contains(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_bool(array_contains(
 		get_array(args[0]), args[1]));
@@ -6785,7 +6917,7 @@ static value_t std_array_contains(value_t* args, lur_t* ctx) {
 	"array value start\nFinds the first index of value in the " \
 	"array after the index start."
 
-static value_t std_array_find(value_t* args, lur_t* ctx) {
+static value_t std_array_find(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(2, TYPE_NUMBER);
 	array_t* array = get_array(args[0]);
@@ -6805,7 +6937,7 @@ static value_t std_array_find(value_t* args, lur_t* ctx) {
 	"array fn\nIterates over the array and calls fn for each " \
 	"item, passing the item to fn."
 
-static value_t std_array_iter(value_t* args, lur_t* ctx) {
+static value_t std_array_iter(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -6813,7 +6945,7 @@ static value_t std_array_iter(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { array->items[i] };
-		lur_call_function(ctx, fref, args, 1);
+		gluon_call_function(ctx, fref, args, 1);
 	}
 	
 	return make_none();
@@ -6823,7 +6955,7 @@ static value_t std_array_iter(value_t* args, lur_t* ctx) {
 	"array fn\nIterates over the array and calls fn for each " \
 	"item, passing the index and item to fn."
 
-static value_t std_array_iteri(value_t* args, lur_t* ctx) {
+static value_t std_array_iteri(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -6831,7 +6963,7 @@ static value_t std_array_iteri(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { make_number(i), array->items[i] };
-		lur_call_function(ctx, fref, args, 2);
+		gluon_call_function(ctx, fref, args, 2);
 	}
 	
 	return make_none();
@@ -6842,7 +6974,7 @@ static value_t std_array_iteri(value_t* args, lur_t* ctx) {
 	"iterating over the original and passing each value " \
 	"through fn."
 
-static value_t std_array_map(value_t* args, lur_t* ctx) {
+static value_t std_array_map(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -6851,7 +6983,7 @@ static value_t std_array_map(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { array->items[i] };
-		value_t result = lur_call_function(ctx, fref, args, 1);
+		value_t result = gluon_call_function(ctx, fref, args, 1);
 		array_push(mapped, result, ctx);
 	}
 	
@@ -6862,7 +6994,7 @@ static value_t std_array_map(value_t* args, lur_t* ctx) {
 	"array fn\nPasses each value in the array to fn and " \
 	"adds it to the new array if fn returns true."
 
-static value_t std_array_filter(value_t* args, lur_t* ctx) {
+static value_t std_array_filter(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -6871,8 +7003,11 @@ static value_t std_array_filter(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { array->items[i] };
-		value_t result = lur_call_function(ctx, fref, args, 1);
-		if (result.tag == TYPE_BOOL && get_bool(result))
+		value_t result = gluon_call_function(ctx, fref, args, 1);
+		if (result.tag != TYPE_BOOL)
+			error(ctx, ERR_TYPECHECK(
+				result.tag, TYPE_BOOL));
+		if (get_bool(result))
 			array_push(filtered, array->items[i], ctx);
 	}
 	
@@ -6881,10 +7016,10 @@ static value_t std_array_filter(value_t* args, lur_t* ctx) {
 
 #define STD_ARRAY_FOLD_DOC \
 	"array init fn\nReduces the list down to a single value " \
-	"by passing each pair in the list, with init as the first item," \
-	" to the function fn."
+	"by passing each pair in the list, with init as the first " \
+	"item, to the function fn."
 
-static value_t std_array_fold(value_t* args, lur_t* ctx) {
+static value_t std_array_fold(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(2, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -6893,7 +7028,7 @@ static value_t std_array_fold(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { result, array->items[i] };
-		result = lur_call_function(ctx, fref, args, 2);
+		result = gluon_call_function(ctx, fref, args, 2);
 	}
 	
 	return result;
@@ -6903,7 +7038,7 @@ static value_t std_array_fold(value_t* args, lur_t* ctx) {
 	"array\nReturns a copy of the array with any " \
 	"embedded arrays flattened out."
 
-static value_t std_array_flat(value_t* args, lur_t* ctx) {
+static value_t std_array_flat(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_array(array_flat(
 		get_array(args[0]), ctx));
@@ -6913,7 +7048,7 @@ static value_t std_array_flat(value_t* args, lur_t* ctx) {
 	"array\nReturns a copy of the array with any duplicates " \
 	"removed."
 
-static value_t std_array_dedup(value_t* args, lur_t* ctx) {
+static value_t std_array_dedup(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	array_t* array = get_array(args[0]);
 	array_t* result = array_new(ctx);
@@ -6924,9 +7059,9 @@ static value_t std_array_dedup(value_t* args, lur_t* ctx) {
 }
 
 #define STD_ARRAY_SUM_DOC \
-	"array\nSums all numbers in the list."
+	"array\nSums all numbers in the array."
 
-static value_t std_array_sum(value_t* args, lur_t* ctx) {
+static value_t std_array_sum(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	
@@ -6942,9 +7077,9 @@ static value_t std_array_sum(value_t* args, lur_t* ctx) {
 }
 
 #define STD_ARRAY_AVERAGE_DOC \
-	"array\nReturns the average number in the list."
+	"array\nReturns the average number in the array."
 
-static value_t std_array_average(value_t* args, lur_t* ctx) {
+static value_t std_array_average(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	
@@ -6961,9 +7096,9 @@ static value_t std_array_average(value_t* args, lur_t* ctx) {
 }
 
 #define STD_ARRAY_MEDIAN_DOC \
-	"array\nReturns the median value in the list."
+	"array\nReturns the median value in the array."
 
-static value_t std_array_median(value_t* args, lur_t* ctx) {
+static value_t std_array_median(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* array = get_array(args[0]);
 	
@@ -6994,7 +7129,7 @@ static value_t std_array_median(value_t* args, lur_t* ctx) {
 	"array fn\nReturns true if the array contains any " \
 	"elements that pass the predicate returned by fn."
 
-static value_t std_array_any(value_t* args, lur_t* ctx) {
+static value_t std_array_any(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -7002,7 +7137,7 @@ static value_t std_array_any(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { array->items[i] };
-		value_t result = lur_call_function(ctx, fref, args, 1);
+		value_t result = gluon_call_function(ctx, fref, args, 1);
 		if (result.tag != TYPE_BOOL)
 			error(ctx, ERR_TYPECHECK(result.tag,
 				TYPE_BOOL));
@@ -7017,7 +7152,7 @@ static value_t std_array_any(value_t* args, lur_t* ctx) {
 	"array fn\nReturns true if the array contains only " \
 	"elements that pass the predicate returned by fn."
 
-static value_t std_array_all(value_t* args, lur_t* ctx) {
+static value_t std_array_all(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_FREF);
 	const array_t* array = get_array(args[0]);
@@ -7025,7 +7160,7 @@ static value_t std_array_all(value_t* args, lur_t* ctx) {
 	
 	for (size_t i = 0; i < array->len; i++) {
 		value_t args[] = { array->items[i] };
-		value_t result = lur_call_function(ctx, fref, args, 1);
+		value_t result = gluon_call_function(ctx, fref, args, 1);
 		if (result.tag != TYPE_BOOL)
 			error(ctx, ERR_TYPECHECK(result.tag,
 				TYPE_BOOL));
@@ -7039,7 +7174,7 @@ static value_t std_array_all(value_t* args, lur_t* ctx) {
 #define STD_ARRAY_SORT_DOC \
 	"array\nSorts the array."
 
-static value_t std_array_sort(value_t* args, lur_t* ctx) {
+static value_t std_array_sort(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_array(array_sort(
 		get_array(args[0]), ctx));
@@ -7049,7 +7184,7 @@ static value_t std_array_sort(value_t* args, lur_t* ctx) {
 	"array a b\nReturns a copy of the list with elements at " \
 	"indices a and b swapped."
 
-static value_t std_array_swap(value_t* args, lur_t* ctx) {
+static value_t std_array_swap(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
@@ -7070,7 +7205,7 @@ static value_t std_array_swap(value_t* args, lur_t* ctx) {
 	"array start end pos\nMoves the items contained " \
 	"within start and end to the index pos in the array."
 	
-static value_t std_array_move(value_t* args, lur_t* ctx) {
+static value_t std_array_move(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	typecheck(2, TYPE_NUMBER);
@@ -7102,7 +7237,7 @@ static value_t std_array_move(value_t* args, lur_t* ctx) {
 #define STD_ARRAY_JOIN_DOC \
 	"array\nMerges the items in the array into a single text."
 
-static value_t std_array_join(value_t* args, lur_t* ctx) {
+static value_t std_array_join(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	return make_text(array_join(get_array(args[0]), ctx));
 }
@@ -7110,7 +7245,7 @@ static value_t std_array_join(value_t* args, lur_t* ctx) {
 #define STD_ARRAY_ZIP_DOC \
 	"zip\nTakes a list of arrays and zipper merges them."
 
-static value_t std_array_zip(value_t* args, lur_t* ctx) {
+static value_t std_array_zip(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* arrays = get_array(args[0]);
 	array_t* zip = array_new(ctx);
@@ -7140,7 +7275,7 @@ static value_t std_array_zip(value_t* args, lur_t* ctx) {
 	"array size\nSplits an array into a series of smaller " \
 	"chunks."
 
-static value_t std_array_chunk(value_t* args, lur_t* ctx) {
+static value_t std_array_chunk(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_NUMBER);
 	array_t* original = get_array(args[0]);
@@ -7163,7 +7298,7 @@ static value_t std_array_chunk(value_t* args, lur_t* ctx) {
 #define STD_MAP_LEN_DOC \
 	"map\nReturns the length of the map."
 
-static value_t std_map_len(value_t* args, lur_t* ctx) {
+static value_t std_map_len(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	return make_number(get_map(args[0])->len);
 }
@@ -7171,7 +7306,7 @@ static value_t std_map_len(value_t* args, lur_t* ctx) {
 #define STD_MAP_GET_DOC \
 	"map key\nReturns the value associated with a key."
 
-static value_t std_map_get(value_t* args, lur_t* ctx) {
+static value_t std_map_get(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
 	value_t value;
@@ -7183,7 +7318,7 @@ static value_t std_map_get(value_t* args, lur_t* ctx) {
 #define STD_MAP_SET_DOC \
 	"map key value\nCreates or updates the key/value pair."
 
-static value_t std_map_set(value_t* args, lur_t* ctx) {
+static value_t std_map_set(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	map_set(get_map(args[0]), args[1], args[2], ctx);
 	return make_none();
@@ -7193,9 +7328,12 @@ static value_t std_map_set(value_t* args, lur_t* ctx) {
 	"map key\nDeletes the key/value pair associated with " \
 	"the key."
 
-static value_t std_map_delete(value_t* args, lur_t* ctx) {
+static value_t std_map_delete(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_MAP);
-	map_delete(get_map(args[0]), args[1], ctx);
+	bool found = map_delete(
+		get_map(args[0]), args[1], ctx);
+	if (!found)
+		error(ctx, ERR_UNDEFINED(args[1], ctx));
 	return make_none();
 }
 
@@ -7203,7 +7341,7 @@ static value_t std_map_delete(value_t* args, lur_t* ctx) {
 	"map key\nReturns true if the map contains the " \
 	"given key."
 
-static value_t std_map_has_key(value_t* args, lur_t* ctx)
+static value_t std_map_has_key(value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
@@ -7223,7 +7361,7 @@ static value_t std_map_has_key(value_t* args, lur_t* ctx)
 	"given value."
 
 static value_t std_map_has_value(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
@@ -7242,7 +7380,7 @@ static value_t std_map_has_value(
 	"map\nReturns an array containing all the keys " \
 	"of the map."
 
-static value_t std_map_keys(value_t* args, lur_t* ctx) {
+static value_t std_map_keys(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
 	array_t* keys = array_new(ctx);
@@ -7260,7 +7398,7 @@ static value_t std_map_keys(value_t* args, lur_t* ctx) {
 	"map\nReturns an array containing all the values " \
 	"of the map."
 
-static value_t std_map_values(value_t* args, lur_t* ctx) {
+static value_t std_map_values(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
 	array_t* values = array_new(ctx);
@@ -7278,7 +7416,7 @@ static value_t std_map_values(value_t* args, lur_t* ctx) {
 	"map\nReturns a list containing all key/value pairs."
 
 static value_t std_map_kv_pairs(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_MAP);
 	const map_t* map = get_map(args[0]);
@@ -7305,7 +7443,7 @@ static value_t std_map_kv_pairs(
 	"key/value pairs"
 
 static value_t std_map_from_kv_pairs(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_ARRAY);
 	const array_t* pairs = get_array(args[0]);
@@ -7330,7 +7468,7 @@ static value_t std_map_from_kv_pairs(
 	"map fn\nIterates over all entries in the map, passing " \
 	"each key and value to fn."
 
-static value_t std_map_iter(value_t* args, lur_t* ctx) {
+static value_t std_map_iter(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	typecheck(1, TYPE_FREF);
 	const map_t* map = get_map(args[0]);
@@ -7340,7 +7478,7 @@ static value_t std_map_iter(value_t* args, lur_t* ctx) {
 		const map_entry_t* entry = &map->entries[i];
 		if (entry->key.tag == TYPE_NONE) continue;
 		value_t args[] = { entry->key, entry->value };
-		lur_call_function(ctx, fref, args, 2);
+		gluon_call_function(ctx, fref, args, 2);
 	}
 	
 	return make_none();
@@ -7350,7 +7488,7 @@ static value_t std_map_iter(value_t* args, lur_t* ctx) {
 	"map\nIterates over all entries in the map, passing " \
 	"each key and value, alongside the current index to fn."
 
-static value_t std_map_iteri(value_t* args, lur_t* ctx) {
+static value_t std_map_iteri(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_MAP);
 	typecheck(1, TYPE_FREF);
 	const map_t* map = get_map(args[0]);
@@ -7362,7 +7500,7 @@ static value_t std_map_iteri(value_t* args, lur_t* ctx) {
 		if (entry->key.tag == TYPE_NONE) continue;
 		value_t args[] = {
 			make_number(index), entry->key, entry->value };
-		lur_call_function(ctx, fref, args, 3);
+		gluon_call_function(ctx, fref, args, 3);
 		index++;
 	}
 	
@@ -7374,7 +7512,7 @@ static value_t std_map_iteri(value_t* args, lur_t* ctx) {
 	"returning default if not found."
 
 static value_t std_map_get_or_default(
-	value_t* args, lur_t* ctx)
+	value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_MAP);
 	map_t* map = get_map(args[0]);
@@ -7384,26 +7522,26 @@ static value_t std_map_get_or_default(
 	return value;
 }
 
-lur_config_t lur_default_config(void);
-lur_t* lur_new(lur_config_t, int, char**);
-void lur_free(lur_t*);
+gluon_config_t gluon_default_config(void);
+gluon_t* gluon_new(gluon_config_t, int, char**);
+void gluon_free(gluon_t*);
 
 void* thread_spawn(void* ptr) {
-	lur_t* prev_ctx = (lur_t*)ptr;
-	lur_t* ctx = lur_new(prev_ctx->cfg, 0, NULL);
+	gluon_t* prev_ctx = (gluon_t*)ptr;
+	gluon_t* ctx = gluon_new(prev_ctx->cfg, 0, NULL);
 	
 	*ctx->vm.sp++ = make_fref(prev_ctx->thread_fref);
 	for (size_t i = 0; i < prev_ctx->thread_args->len; i++)
 		*ctx->vm.sp++ = prev_ctx->thread_args->items[i];
 	
 	ctx->running = true;
-	prev_ctx->thread_retval = vm_launch(&ctx->vm,
+	prev_ctx->thread_retval = vm_exec(&ctx->vm,
 		make_fref(prev_ctx->thread_fref),
 		prev_ctx->thread_args->len,
 		true);
 	ctx->running = false;
 	
-//	lur_free(ctx); TODO: fix
+//	gluon_free(ctx); TODO: fix
 	return NULL;
 }
 
@@ -7411,7 +7549,7 @@ void* thread_spawn(void* ptr) {
 	"fn args\nSpawns a new thread that calls the function " \
 	"fn with the specified arguments."
 
-static value_t std_thread_spawn(value_t* args, lur_t* ctx) {
+static value_t std_thread_spawn(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_FREF);
 	typecheck(1, TYPE_ARRAY);
 
@@ -7445,7 +7583,7 @@ static value_t std_thread_spawn(value_t* args, lur_t* ctx) {
 	"thread\nJoins the thread with the specified id to the " \
 	"main thread, waiting for it to complete its work."
 
-static value_t std_thread_join(value_t* args, lur_t* ctx) {
+static value_t std_thread_join(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	size_t id = (size_t)get_number(args[0]);
 	if (id > MAX_THREADS ||
@@ -7458,7 +7596,7 @@ static value_t std_thread_join(value_t* args, lur_t* ctx) {
 	return ctx->thread_retval;
 }
 
-static text_t* io_read(const text_t* path, lur_t* ctx) {
+static text_t* io_read(const text_t* path, gluon_t* ctx) {
 	assert(path && ctx);
 	FILE* fp = fopen((const char*)path->buffer, "r");
 	if (!fp) error(ctx, ERR_READ_FAILED(path));
@@ -7473,7 +7611,7 @@ static text_t* io_read(const text_t* path, lur_t* ctx) {
 	return text;
 }
 
-static text_t* io_read_stdin(lur_t* ctx) {
+static text_t* io_read_stdin(gluon_t* ctx) {
 	assert(ctx);
 	
 	char* line = NULL;
@@ -7490,7 +7628,7 @@ static text_t* io_read_stdin(lur_t* ctx) {
 }
 
 static void io_write(
-	const text_t* path, const text_t* output, lur_t* ctx)
+	const text_t* path, const text_t* output, gluon_t* ctx)
 {
 	assert(path && output && ctx);
 	FILE* fp = fopen((const char*)path->buffer, "w");
@@ -7500,7 +7638,7 @@ static void io_write(
 }
 
 static void io_append(
-	const text_t* path, const text_t* output, lur_t* ctx)
+	const text_t* path, const text_t* output, gluon_t* ctx)
 {
 	assert(path && output && ctx);
 	FILE* fp = fopen((const char*)path->buffer, "a");
@@ -7509,7 +7647,7 @@ static void io_append(
 	fclose(fp);
 }
 
-static size_t io_file_size(const text_t* path, lur_t* ctx) {
+static size_t io_file_size(const text_t* path, gluon_t* ctx) {
 	assert(path && ctx);
 	FILE* fp = fopen((const char*)path->buffer, "r");
 	if (!fp) error(ctx, ERR_READ_FAILED(path));
@@ -7522,23 +7660,23 @@ static size_t io_file_size(const text_t* path, lur_t* ctx) {
 #define STD_IO_PRINT_DOC \
 	"value\nPrints the provided value to standard output."
 
-static value_t std_io_print(value_t* args, lur_t* ctx) {
+static value_t std_io_print(value_t* args, gluon_t* ctx) {
 	value_print(args[0], ctx);
-	lur_printf("\n");
+	gluon_printf("\n");
 	return make_none();
 }
 
 #define STD_IO_INPUT_DOC \
 	"Returns a line read from standard input as text."
 
-static value_t std_io_input(value_t* args, lur_t* ctx) {
+static value_t std_io_input(value_t* args, gluon_t* ctx) {
 	return make_text(io_read_stdin(ctx));
 }
 
 #define STD_IO_READ_DOC \
 	"path\nReturns text read from the provided path."
 
-static value_t std_io_read(value_t* args, lur_t* ctx) {
+static value_t std_io_read(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	return make_text(io_read(get_text(args[0]), ctx));
 }
@@ -7546,7 +7684,7 @@ static value_t std_io_read(value_t* args, lur_t* ctx) {
 #define STD_IO_WRITE_DOC \
 	"path text\nWrites text to the file at the provided path."
 
-static value_t std_io_write(value_t* args, lur_t* ctx) {
+static value_t std_io_write(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	io_write(get_text(args[0]), get_text(args[1]), ctx);
@@ -7556,7 +7694,7 @@ static value_t std_io_write(value_t* args, lur_t* ctx) {
 #define STD_IO_APPEND_DOC \
 	"path text\nAppends text to the file at the provided path."
 
-static value_t std_io_append(value_t* args, lur_t* ctx) {
+static value_t std_io_append(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	typecheck(1, TYPE_TEXT);
 	io_append(get_text(args[0]), get_text(args[1]), ctx);
@@ -7566,7 +7704,7 @@ static value_t std_io_append(value_t* args, lur_t* ctx) {
 #define STD_IO_SIZE_DOC \
 	"path\nReturns the size of the file at path."
 
-static value_t std_io_size(value_t* args, lur_t* ctx) {
+static value_t std_io_size(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	return make_number(
 		io_file_size(get_text(args[0]), ctx));
@@ -7575,7 +7713,7 @@ static value_t std_io_size(value_t* args, lur_t* ctx) {
 #define STD_IO_DIR_EXISTS_DOC \
 	"path\nReturns true if a directory exists at path."
 
-static value_t std_io_dir_exists(value_t* args, lur_t* ctx) {
+static value_t std_io_dir_exists(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* path = get_text(args[0]);
 	struct stat st = {0};
@@ -7587,7 +7725,7 @@ static value_t std_io_dir_exists(value_t* args, lur_t* ctx) {
 #define STD_IO_MAKE_DIR_DOC \
 	"path\nCreates an empty directory at path."
 
-static value_t std_io_make_dir(value_t* args, lur_t* ctx) {
+static value_t std_io_make_dir(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* path = get_text(args[0]);
 	mkdir((const char*)path->buffer, 0700);
@@ -7596,9 +7734,9 @@ static value_t std_io_make_dir(value_t* args, lur_t* ctx) {
 
 #define STD_IO_LIST_DIR_DOC \
 	"path\nReturns an array containing all files found in the " \
-	"directory. use path '.' for current directory."
+	"directory. Use the path '.' for the current directory."
 
-static value_t std_io_list_dir(value_t* args, lur_t* ctx) {
+static value_t std_io_list_dir(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	const text_t* path = get_text(args[0]);
 	array_t* files = array_new(ctx);
@@ -7623,7 +7761,7 @@ static value_t std_io_list_dir(value_t* args, lur_t* ctx) {
 	"paths copy_to\nCopies all files in paths to the " \
 	"directory copy_to."
 	
-static value_t std_io_copy(value_t* args, lur_t* ctx) {
+static value_t std_io_copy(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_TEXT);
 	const array_t* paths = get_array(args[0]);
@@ -7650,7 +7788,7 @@ static value_t std_io_copy(value_t* args, lur_t* ctx) {
 	"paths move_to\nMoves all files in paths to the " \
 	"directory move_to."
 	
-static value_t std_io_move(value_t* args, lur_t* ctx) {
+static value_t std_io_move(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_ARRAY);
 	typecheck(1, TYPE_TEXT);
 	const array_t* paths = get_array(args[0]);
@@ -7677,7 +7815,7 @@ static value_t std_io_move(value_t* args, lur_t* ctx) {
 #define STD_IO_DELETE_DOC \
 	"path\nDeletes the file or directory at the given path."
 
-static value_t std_io_delete(value_t* args, lur_t* ctx) {
+static value_t std_io_delete(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_TEXT);
 	remove((char*)get_text(args[0])->buffer);
 	return make_none();
@@ -7686,7 +7824,7 @@ static value_t std_io_delete(value_t* args, lur_t* ctx) {
 #define STD_SOCKET_CREATE_DOC \
 	"type\nCreates a new socket of the specified type."
 
-static value_t std_socket_create(value_t* args, lur_t* ctx) {
+static value_t std_socket_create(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int type = (int)get_number(args[0]);
 	int handle = socket(AF_INET,
@@ -7709,7 +7847,7 @@ static value_t std_socket_create(value_t* args, lur_t* ctx) {
 	"socket ip port\nConnects the socket to the specified " \
 	"ip:port."
 
-static value_t std_socket_connect(value_t* args, lur_t* ctx)
+static value_t std_socket_connect(value_t* args, gluon_t* ctx)
 {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_TEXT);
@@ -7742,7 +7880,7 @@ static value_t std_socket_connect(value_t* args, lur_t* ctx)
 	"socket ip port\nBinds the socket to ip:port, " \
 	"used for servers."
 
-static value_t std_socket_bind(value_t* args, lur_t* ctx) {
+static value_t std_socket_bind(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_TEXT);
 	typecheck(2, TYPE_NUMBER);
@@ -7772,9 +7910,11 @@ static value_t std_socket_bind(value_t* args, lur_t* ctx) {
 
 #define STD_SOCKET_LISTEN_DOC \
 	"socket backlog\nSets up a listen server on the socket, " \
-	"with a backlog of max backlog connections."
+	"with a backlog of max backlog connections. This " \
+	"should be called after socket.bind in order to " \
+	"create a server socket."
 
-static value_t std_socket_listen(value_t* args, lur_t* ctx) {
+static value_t std_socket_listen(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_NUMBER);
 	int handle = (int)get_number(args[0]);
@@ -7789,17 +7929,11 @@ static value_t std_socket_listen(value_t* args, lur_t* ctx) {
 #define STD_SOCKET_ACCEPT_DOC \
 	"socket\nAccepts an incoming connection request. " \
 	"Returns a new socket handle used for sending data " \
-	"to the client."
+	"to the new client."
  
-static value_t std_socket_accept(value_t* args, lur_t* ctx) {
+static value_t std_socket_accept(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int server = (int)get_number(args[0]);
-	
-	struct sockaddr_in addr;
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-	addr.sin_port = htons(25565);
-
 	int result = accept(server, NULL, NULL);
 	if (result == -1)
 		error(ctx, ERR_SOCKET_ACCEPT_FAILED(
@@ -7810,7 +7944,7 @@ static value_t std_socket_accept(value_t* args, lur_t* ctx) {
 #define STD_SOCKET_SEND_DOC \
 	"socket text\nSends text over the network."
 
-static value_t std_socket_send(value_t* args, lur_t* ctx) {
+static value_t std_socket_send(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_TEXT);
 	int handle = (int)get_number(args[0]);
@@ -7825,7 +7959,7 @@ static value_t std_socket_send(value_t* args, lur_t* ctx) {
 #define STD_SOCKET_RECV_DOC \
 	"socket\nReceives data sent over the network as text."
 
-static value_t std_socket_recv(value_t* args, lur_t* ctx) {
+static value_t std_socket_recv(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int handle = (int)get_number(args[0]);
 	
@@ -7841,7 +7975,7 @@ static value_t std_socket_recv(value_t* args, lur_t* ctx) {
 #define STD_SOCKET_CLOSE_DOC \
 	"socket\nCloses and disconnects a socket."
 
-static value_t std_socket_close(value_t* args, lur_t* ctx) {
+static value_t std_socket_close(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	int handle = (int)get_number(args[0]);
 	int result = close(handle);
@@ -7890,6 +8024,8 @@ static unit_t units[] = {
 	
 	(unit_t){"km/h", "m/s", 1.0 / 3.6},
 	(unit_t){"ft/s", "m/s", 1.0 / 3.28084},
+	(unit_t){"cm/s", "m/s", 1.0 / 100.0},
+	(unit_t){"dm/s", "m/s", 1.0 / 10.0},
 	(unit_t){"m/s", "m/s", 1.0},
 	
 	(unit_t){"nanoseconds", "seconds",
@@ -7928,7 +8064,7 @@ static unit_t* find_unit(const char* name) {
 	"unit in order to access this function " \
 	"(example: 1: \"km\", \"m\")"
 
-static value_t std_unit_convert(value_t* args, lur_t* ctx) {
+static value_t std_unit_convert(value_t* args, gluon_t* ctx) {
 	typecheck(0, TYPE_NUMBER);
 	typecheck(1, TYPE_TEXT);
 	typecheck(2, TYPE_TEXT);
@@ -7959,7 +8095,7 @@ static value_t std_unit_convert(value_t* args, lur_t* ctx) {
 #define STD_UNIT_LIST_DOC \
 	"Returns a map containing information about all units."
 	
-static value_t std_unit_list(value_t* args, lur_t* ctx) {
+static value_t std_unit_list(value_t* args, gluon_t* ctx) {
 	map_t* result = map_new(ctx);
 	size_t len = sizeof(units) / sizeof(units[0]);
 	for (size_t i = 0; i < len; i++) {
@@ -7987,8 +8123,8 @@ static value_t std_unit_list(value_t* args, lur_t* ctx) {
 
 #undef typecheck
 
-static const map_t* lur_new_enum(
-	lur_t* ctx, const char* items[], size_t len)
+static const map_t* gluon_new_enum(
+	gluon_t* ctx, const char* items[], size_t len)
 {
 	map_t* enum_ = map_new(ctx);
 	for (size_t i = 0; i < len; i++)
@@ -8000,7 +8136,7 @@ static const map_t* lur_new_enum(
 }
 
 static void stdvar_add(
-	lur_t* ctx,
+	gluon_t* ctx,
 	const char* name,
 	value_t value,
 	const char* help_text)
@@ -8035,7 +8171,7 @@ static void stdvar_add(
 }
 
 static void stdfun_add(
-	lur_t* ctx, const char* name, 
+	gluon_t* ctx, const char* name, 
 	uint8_t argc, syscall_fn_t fn,
 	const char* help_text)
 {
@@ -8049,7 +8185,7 @@ static void stdfun_add(
 }
 
 static void std_set_module(
-	lur_t* ctx, const char* name)
+	gluon_t* ctx, const char* name)
 {
 	if (!name) {
 		ctx->std_map = NULL;
@@ -8066,7 +8202,7 @@ static void std_set_module(
 		ctx);
 }
 
-void stdlib_load(lur_t* ctx) {
+void stdlib_load(gluon_t* ctx) {
 	gc_pause(ctx);
 	
 	stdvar_add(ctx, "NAMES",
@@ -8077,7 +8213,7 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "eval", 1, std_eval, STD_EVAL_DOC);
 	stdfun_add(ctx, "error", 1, std_error, STD_ERROR_DOC);
 	stdvar_add(ctx, "type",
-		make_map(lur_new_enum(ctx, TYPE_NAMES, 7)),
+		make_map(gluon_new_enum(ctx, TYPE_NAMES, 7)),
 		"Type names.");
 	stdfun_add(ctx, "type_of", 1, std_type_of,
 		STD_TYPE_OF_DOC);
@@ -8099,8 +8235,8 @@ void stdlib_load(lur_t* ctx) {
 		STD_WHILE_DOC);
 	stdfun_add(ctx, "range", 2, std_range,
 		STD_RANGE_DOC);
-	stdfun_add(ctx, "range_inc", 2, std_range_inc,
-		STD_RANGE_INC_DOC);
+	stdfun_add(ctx, "irange", 2, std_irange,
+		STD_IRANGE_DOC);
 	stdfun_add(ctx, "enum", 1, std_enum,
 		STD_ENUM_DOC);
 	stdfun_add(ctx, "assert", 1, std_assert,
@@ -8146,7 +8282,7 @@ void stdlib_load(lur_t* ctx) {
 	
 	std_set_module(ctx, "system");
 	stdvar_add(ctx, "VERSION",
-		make_text(text_lit(LUR_VERSION, ctx)),
+		make_text(text_lit(GLUON_VERSION, ctx)),
 		"Lur version.");
 	stdvar_add(ctx, "PLATFORM",
 		make_text(text_lit(system_get_platform(), ctx)),
@@ -8213,8 +8349,8 @@ void stdlib_load(lur_t* ctx) {
 		STD_MATH_MAX_DOC);
 	stdfun_add(ctx, "clip", 3, std_math_clip,
 		STD_MATH_CLIP_DOC);
-	stdfun_add(ctx, "lerp", 3, std_math_lerp,
-		STD_MATH_LERP_DOC);
+	stdfun_add(ctx, "mix", 3, std_math_mix,
+		STD_MATH_MIX_DOC);
 	stdfun_add(ctx, "interp_to", 4, std_math_interp_to,
 		STD_MATH_INTERP_TO_DOC);
 	stdfun_add(ctx, "floor", 1, std_math_floor,
@@ -8268,26 +8404,34 @@ void stdlib_load(lur_t* ctx) {
 	std_set_module(ctx, NULL);
 	
 	std_set_module(ctx, "vec");
-	stdvar_add(ctx, "X", make_array(lur_new_num_array(
-		(const double[]){1, 0, 0}, 3, ctx)), "global X axis.");
-	stdvar_add(ctx, "Y", make_array(lur_new_num_array(
-		(const double[]){0, 1, 0}, 3, ctx)), "global Y axis.");
-	stdvar_add(ctx, "Z", make_array(lur_new_num_array(
-		(const double[]){0, 0, 1}, 3, ctx)), "global Z axis.");
+	stdvar_add(ctx, "X", make_array(gluon_new_num_array(
+		(const double[]){1, 0, 0}, 3, ctx)), "Global X axis.");
+	stdvar_add(ctx, "Y", make_array(gluon_new_num_array(
+		(const double[]){0, 1, 0}, 3, ctx)), "Global Y axis.");
+	stdvar_add(ctx, "Z", make_array(gluon_new_num_array(
+		(const double[]){0, 0, 1}, 3, ctx)), "Global Z axis.");
 	stdvar_add(ctx, "ZERO",
-		make_array(lur_new_num_array(
+		make_array(gluon_new_num_array(
 			(const double[]){0, 0, 0}, 3, ctx)), "[0, 0, 0].");
 	stdvar_add(ctx, "ONE",
-		make_array(lur_new_num_array(
+		make_array(gluon_new_num_array(
 			(const double[]){1, 1, 1}, 3, ctx)), "[1, 1, 1].");
 	stdfun_add(ctx, "size", 1, std_vec_size,
 		STD_VEC_SIZE_DOC);
+	stdfun_add(ctx, "size2", 1, std_vec_size2,
+		STD_VEC_SIZE2_DOC);
 	stdfun_add(ctx, "norm", 1, std_vec_norm,
 		STD_VEC_NORM_DOC);
 	stdfun_add(ctx, "dot", 2, std_vec_dot,
 		STD_VEC_DOT_DOC);
 	stdfun_add(ctx, "cross", 2, std_vec_cross,
 		STD_VEC_CROSS_DOC);
+	stdfun_add(ctx, "distance", 2, std_vec_distance,
+		STD_VEC_DISTANCE_DOC);
+	stdfun_add(ctx, "distance2", 2, std_vec_distance2,
+		STD_VEC_DISTANCE2_DOC);
+	stdfun_add(ctx, "mix", 3, std_vec_mix,
+		STD_VEC_MIX_DOC);
 	stdfun_add(ctx, "interp_to", 4, std_vec_interp_to,
 		STD_VEC_INTERP_TO_DOC);
 	std_set_module(ctx, NULL);
@@ -8408,7 +8552,7 @@ void stdlib_load(lur_t* ctx) {
 	stdfun_add(ctx, "iteri", 2, std_array_iteri,
 		STD_ARRAY_ITERI_DOC);
 	stdfun_add(ctx, "map", 2, std_array_map,
-		STD_ARRAY_FILTER_DOC);
+		STD_ARRAY_MAP_DOC);
 	stdfun_add(ctx, "filter", 2, std_array_filter,
 		STD_ARRAY_FILTER_DOC);
 	stdfun_add(ctx, "fold", 3, std_array_fold,
@@ -8512,7 +8656,7 @@ void stdlib_load(lur_t* ctx) {
 		"The localhost address.");
 	const char* socket_type[] = {"Stream", "Datagram"};
 	stdvar_add(ctx, "type",
-		make_map(lur_new_enum(ctx, socket_type, 2)),
+		make_map(gluon_new_enum(ctx, socket_type, 2)),
 		"The type of the socket.");
 	stdfun_add(ctx, "create", 1, std_socket_create,
 		STD_SOCKET_CREATE_DOC);
@@ -8542,20 +8686,20 @@ void stdlib_load(lur_t* ctx) {
 	gc_resume(ctx);
 }
 
-lur_config_t lur_default_config(void) {
-	lur_config_t cfg;
+gluon_config_t gluon_default_config(void) {
+	gluon_config_t cfg;
 	cfg.memory_limit = 0;
 	return cfg;
 }
 
-lur_t* lur_new(lur_config_t cfg, int argc, char** argv ) {
-	lur_t* ctx = mem_alloc(NULL, sizeof(lur_t));
+gluon_t* gluon_new(gluon_config_t cfg, int argc, char** argv ) {
+	gluon_t* ctx = mem_alloc(NULL, sizeof(gluon_t));
 	if (setjmp(ctx->errjmp)) return NULL;
 	
 	ctx->cfg = cfg;
 	ctx->cur_vm = 0;
 	
-	ctx->mem.bytes = sizeof(lur_t);
+	ctx->mem.bytes = sizeof(gluon_t);
 	ctx->mem.total = ctx->mem.bytes;
 	ctx->mem.next_gc = FIRST_GC_LIMIT;
 	ctx->mem.objs = NULL;
@@ -8587,7 +8731,7 @@ lur_t* lur_new(lur_config_t cfg, int argc, char** argv ) {
 	return ctx;
 }
 
-void lur_free(lur_t* ctx) {
+void gluon_free(gluon_t* ctx) {
 	if (!ctx) return;
 	
 	vm_free(&ctx->vm, ctx);
@@ -8599,23 +8743,23 @@ void lur_free(lur_t* ctx) {
 		cur = next;
 	}
 	
-	lur_gc_free(ctx->mem.marked);
+	gluon_gc_free(ctx->mem.marked);
 	
-	#if LUR_DEBUG_PRINT_MEM_STATS
-	lur_dprintf("memory leaked: %td bytes\n",
-		ctx->mem.bytes - sizeof(lur_t));
-	lur_dprintf("total allocated: %zu bytes\n",
+	#if GLUON_DEBUG_PRINT_MEM_STATS
+	gluon_dprintf("memory leaked: %td bytes\n",
+		ctx->mem.bytes - sizeof(gluon_t));
+	gluon_dprintf("total allocated: %zu bytes\n",
 		ctx->mem.total);
-	lur_dprintf("gc objects cleaned: %zu\n",
+	gluon_dprintf("gc objects cleaned: %zu\n",
 		ctx->mem.gc_cleaned);
-	lur_dprintf("gc cycles: %zu\n", ctx->mem.gc_cycles);
+	gluon_dprintf("gc cycles: %zu\n", ctx->mem.gc_cycles);
 	#endif
 	
-	mem_free(ctx, ctx, sizeof(lur_t));
+	mem_free(ctx, ctx, sizeof(gluon_t));
 }
 
 static void exec(
-	lur_t* ctx, const text_t* src, const text_t* path)
+	gluon_t* ctx, const text_t* src, const text_t* path)
 {
 	cl_init(&ctx->cl, src, ctx);
 	cl_compile(&ctx->cl, src, path);
@@ -8624,18 +8768,18 @@ static void exec(
 	value_t fref = make_fref(fref_new(ctx->cl.func, ctx));
 	*ctx->vm.sp++ = fref;
 	ctx->running = true;
-	vm_launch(&ctx->vm, fref, 0, false);
+	vm_exec(&ctx->vm, fref, 0, false);
 	ctx->running = false;
 }
 
-bool lur_xstring(lur_t* ctx, const char* src) {
+bool gluon_xstring(gluon_t* ctx, const char* src) {
 	if (!ctx) return false;
 	if (setjmp(ctx->errjmp)) return false;
 	exec(ctx, text_lit(src, ctx), text_lit("input", ctx));
 	return true;
 }
 
-bool lur_xfile(lur_t* ctx, const char* path) {
+bool gluon_xfile(gluon_t* ctx, const char* path) {
 	if (!ctx) return false;
 	if (setjmp(ctx->errjmp)) return false;
 	exec(ctx,
@@ -8643,24 +8787,24 @@ bool lur_xfile(lur_t* ctx, const char* path) {
 	return true;
 }
 
-void lur_xrepl(lur_t* ctx) {
-	lur_printf("%s\n%s\n",
-		LUR_VERSION, LUR_REPL_GREETING);
+void gluon_xrepl(gluon_t* ctx) {
+	gluon_printf("%s\n%s\n",
+		GLUON_VERSION, GLUON_REPL_GREETING);
 	ctx->interpreter = true;
 	for (;;) {
-		lur_printf(":: ");
-		lur_xstring(ctx,
+		gluon_printf(":: ");
+		gluon_xstring(ctx,
 			(const char*)io_read_stdin(ctx)->buffer);
 	}
 }
 
 int main(int argc, char* argv[]) {
-	lur_config_t cfg = lur_default_config();
-	lur_t* ctx = lur_new(cfg, argc, argv);
+	gluon_config_t cfg = gluon_default_config();
+	gluon_t* ctx = gluon_new(cfg, argc, argv);
 	
-	if (argc == 2) lur_xfile(ctx, argv[1]);
-	else lur_xrepl(ctx);
+	if (argc == 2) gluon_xfile(ctx, argv[1]);
+	else gluon_xrepl(ctx);
 	
-	lur_free(ctx);
+	gluon_free(ctx);
 	return EXIT_SUCCESS;
 }
